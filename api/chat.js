@@ -1,5 +1,4 @@
-// api/chat.js — Vercel Edge Function (Gemini 버전)
-// Anthropic 형식 요청을 받아 Gemini API로 변환하여 전달
+// api/chat.js — Vercel Edge Function (Gemini 2.5 Flash)
 
 export const config = { runtime: 'edge' };
 
@@ -30,9 +29,8 @@ export default async function handler(req) {
     });
   }
 
-  // ── Anthropic 형식 → Gemini 형식 변환 ──────────────────────
   const anthropicBody = await req.json();
-  const { system, messages, max_tokens, tools } = anthropicBody;
+  const { system, messages, tools } = anthropicBody;
 
   const geminiBody = {
     contents: messages.map(m => ({
@@ -40,50 +38,54 @@ export default async function handler(req) {
       parts: [{ text: m.content }],
     })),
     generationConfig: {
-      maxOutputTokens: max_tokens || 1000,
+      maxOutputTokens: 2000,
       temperature: 0.7,
+      thinkingConfig: {
+        thinkingBudget: 0,  // thinking 비활성화 (JSON 응답 안정성)
+      },
     },
   };
 
-  // 시스템 프롬프트
   if (system) {
     geminiBody.systemInstruction = { parts: [{ text: system }] };
   }
 
-  // 웹 검색 도구 (뉴스 주제 가져올 때)
   const wantsSearch = tools?.some(t => t.name === 'web_search' || t.type?.includes('web_search'));
   if (wantsSearch) {
     geminiBody.tools = [{ googleSearch: {} }];
   }
 
-  // ── Gemini API 호출 ─────────────────────────────────────────
   const upstream = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(geminiBody),
   });
 
+  const rawText = await upstream.text();
+
   if (!upstream.ok) {
-    const errText = await upstream.text();
-    return new Response(JSON.stringify({ error: `Gemini API error: ${upstream.status}`, detail: errText }), {
+    return new Response(JSON.stringify({ error: `Gemini API error: ${upstream.status}`, detail: rawText }), {
       status: upstream.status,
       headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
     });
   }
 
-  const geminiData = await upstream.json();
+  let geminiData;
+  try {
+    geminiData = JSON.parse(rawText);
+  } catch {
+    return new Response(JSON.stringify({ error: 'Gemini 응답 파싱 실패', raw: rawText.slice(0, 300) }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+    });
+  }
 
-  // ── Gemini 응답 → Anthropic 형식으로 변환 ──────────────────
   const text = geminiData.candidates?.[0]?.content?.parts
     ?.filter(p => p.text)
     ?.map(p => p.text)
     ?.join('') || '';
 
-  const anthropicResponse = {
-    content: [{ type: 'text', text }],
-  };
-
-  return new Response(JSON.stringify(anthropicResponse), {
+  return new Response(JSON.stringify({ content: [{ type: 'text', text }] }), {
     status: 200,
     headers: {
       'Content-Type': 'application/json',
