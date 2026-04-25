@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>English Daily</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400&family=Lora:ital,wght@0,400;0,500;1,400&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #080d16; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #0f1623; }
+    ::-webkit-scrollbar-thumb { background: #1e2d45; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // ── API ─────────────────────────────────────────────────────────
+    async function callAI(userMsg, system, useSearch = false) {
+      const body = {
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 1000,
+        system,
+        messages: [{ role: "user", content: userMsg }],
+      };
+      if (useSearch) body.tools = [{ type: "web_search_20250305", name: "web_search" }];
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "API 오류: " + res.status);
+      }
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      return data.content.filter(b => b.type === "text").map(b => b.text).join("");
+    }
+
+    function parseJSON(text) {
+      const clean = text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+      return JSON.parse(clean);
+    }
+
+    // ── Streak (localStorage) ────────────────────────────────────────
+    function loadStreak() {
+      try {
+        const d = JSON.parse(localStorage.getItem("eng_streak") || "{}");
+        const today = new Date().toDateString();
+        const yesterday = new Date(Date.now() - 86400000).toDateString();
+        if (d.lastDate === today) return d.streak || 0;
+        if (d.lastDate === yesterday) return d.streak || 0; // valid, will increment today
+        return 0; // streak broken
+      } catch { return 0; }
+    }
+    function saveStreak(n) {
+      localStorage.setItem("eng_streak", JSON.stringify({ streak: n, lastDate: new Date().toDateString() }));
+    }
+
+    // ── Colors & Styles ──────────────────────────────────────────────
+    const C = {
+      bg: "#080d16", card: "#0f1623", cardBorder: "#1e2d45",
+      cream: "#f0e8d5", creamMuted: "#a89880",
+      gold: "#c8962a", goldLight: "#e8b84b",
+      success: "#34d399", error: "#f87171", muted: "#4a5568",
+    };
+    const CAT_COLOR = {
+      "World News": "#3b82f6", "Business": "#f59e0b",
+      "Technology": "#8b5cf6", "Entertainment": "#ec4899", "Science & Health": "#10b981",
+    };
+    const S = {
+      app: { minHeight: "100vh", background: C.bg, color: C.cream, fontFamily: "'Lora', Georgia, serif", paddingBottom: 60 },
+      header: { borderBottom: `1px solid ${C.cardBorder}`, padding: "18px 28px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: C.bg, zIndex: 100 },
+      masthead: { fontFamily: "'Cormorant Garamond', serif", fontSize: 22, fontWeight: 600, letterSpacing: "0.08em", color: C.gold },
+      body: { maxWidth: 680, margin: "0 auto", padding: "0 20px" },
+      card: { background: C.card, border: `1px solid ${C.cardBorder}`, borderRadius: 12, padding: "24px 28px", marginBottom: 16 },
+      btn: { background: C.gold, color: C.bg, border: "none", borderRadius: 8, padding: "14px 28px", fontSize: 15, fontWeight: 600, fontFamily: "'DM Sans', sans-serif", cursor: "pointer", width: "100%", letterSpacing: "0.02em" },
+      btnSec: { background: "transparent", color: C.creamMuted, border: `1px solid ${C.cardBorder}`, borderRadius: 8, padding: "12px 24px", fontSize: 14, fontFamily: "'DM Sans', sans-serif", cursor: "pointer", width: "100%", marginTop: 10 },
+      label: { fontFamily: "'DM Sans', sans-serif", fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase", color: C.creamMuted, marginBottom: 8, display: "block" },
+      h2: { fontFamily: "'Cormorant Garamond', serif", fontSize: 26, fontWeight: 600, color: C.cream, margin: "0 0 6px" },
+      h3: { fontFamily: "'DM Sans', sans-serif", fontSize: 13, fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", color: C.gold, margin: "0 0 12px" },
+      textarea: { width: "100%", background: "#0a1220", border: `1px solid ${C.cardBorder}`, borderRadius: 8, padding: 16, color: C.cream, fontFamily: "'Lora', serif", fontSize: 15, lineHeight: 1.7, resize: "vertical", outline: "none", boxSizing: "border-box", minHeight: 140 },
+    };
+
+    // ── Sub Components ───────────────────────────────────────────────
+    function LoadingScreen({ msg }) {
+      const [dots, setDots] = useState(".");
+      useEffect(() => {
+        const t = setInterval(() => setDots(d => d.length >= 3 ? "." : d + "."), 500);
+        return () => clearInterval(t);
+      }, []);
+      return (
+        <div style={{ textAlign: "center", padding: "80px 20px" }}>
+          <div style={{ fontSize: 40, marginBottom: 20 }}>📖</div>
+          <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 24, color: C.cream, marginBottom: 8 }}>
+            {msg}{dots}
+          </div>
+          <div style={{ color: C.muted, fontSize: 13, fontFamily: "'DM Sans', sans-serif" }}>잠시만 기다려주세요</div>
+        </div>
+      );
+    }
+
+    function StepBar({ step }) {
+      const steps = ["주제", "요약", "스피킹", "피드백", "완료"];
+      return (
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 28, marginTop: 4 }}>
+          {steps.map((s, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", flex: i < steps.length - 1 ? 1 : 0 }}>
+              <div style={{
+                width: 28, height: 28, borderRadius: "50%",
+                background: i < step ? C.gold : i === step ? C.goldLight : C.cardBorder,
+                color: i <= step ? C.bg : C.muted,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 11, fontFamily: "'DM Sans', sans-serif", fontWeight: 700, flexShrink: 0,
+              }}>
+                {i < step ? "✓" : i + 1}
+              </div>
+              {i < steps.length - 1 && (
+                <div style={{ flex: 1, height: 1, background: i < step ? C.gold : C.cardBorder, margin: "0 4px" }} />
+              )}
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    function TopicCard({ topic, onSelect }) {
+      const [hov, setHov] = useState(false);
+      const diff = { Beginner: "#34d399", Intermediate: C.gold, Advanced: "#f87171" };
+      return (
+        <div onClick={() => onSelect(topic)}
+          onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+          style={{ ...S.card, cursor: "pointer", border: `1px solid ${hov ? C.gold : C.cardBorder}`, transition: "all 0.2s", transform: hov ? "translateY(-2px)" : "none" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 20 }}>{topic.emoji}</span>
+              <span style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: CAT_COLOR[topic.category] || C.gold }}>
+                {topic.category}
+              </span>
+            </div>
+            <span style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, color: diff[topic.difficulty] || C.gold, background: (diff[topic.difficulty] || C.gold) + "22", borderRadius: 20, padding: "3px 10px" }}>
+              {topic.difficulty}
+            </span>
+          </div>
+          <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 600, color: C.cream, marginBottom: 6 }}>{topic.title}</div>
+          <div style={{ fontSize: 14, color: C.creamMuted, lineHeight: 1.6 }}>{topic.teaser}</div>
+        </div>
+      );
+    }
+
+    // ── Main App ─────────────────────────────────────────────────────
+    function App() {
+      const [screen, setScreen] = useState("home");
+      const [streak, setStreak] = useState(0);
+      const [topics, setTopics] = useState([]);
+      const [topic, setTopic] = useState(null);
+      const [lesson, setLesson] = useState(null);
+      const [userResp, setUserResp] = useState("");
+      const [feedback, setFeedback] = useState(null);
+      const [userFollowup, setUserFollowup] = useState("");
+      const [finalFb, setFinalFb] = useState(null);
+      const [loadingMsg, setLoadingMsg] = useState("");
+      const [error, setError] = useState(null);
+
+      useEffect(() => { setStreak(loadStreak()); }, []);
+
+      const today = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+
+      async function run(fn, fallbackScreen) {
+        setError(null);
+        try { await fn(); }
+        catch (e) {
+          setError(e.message || "오류가 발생했습니다. 다시 시도해주세요.");
+          if (fallbackScreen) setScreen(fallbackScreen);
+        }
+      }
+
+      async function fetchTopics() {
+        setLoadingMsg("최신 뉴스를 검색하는 중");
+        setScreen("loading");
+        await run(async () => {
+          const sys = `English learning assistant. Search the web for today's 5 diverse interesting topics. Return ONLY valid JSON no markdown:
+{"topics":[{"id":1,"category":"World News","emoji":"🌍","title":"Short title max 8 words","teaser":"One engaging sentence in English","difficulty":"Intermediate"}]}
+Categories: World News, Business, Technology, Entertainment, Science & Health. Difficulty: Beginner/Intermediate/Advanced.`;
+          const text = await callAI("Find 5 diverse interesting current news topics for English learners today.", sys, true);
+          const data = parseJSON(text);
+          setTopics(data.topics);
+          setScreen("selecting");
+        }, "home");
+      }
+
+      async function startLesson(t) {
+        setTopic(t);
+        setLoadingMsg("레슨을 준비하는 중");
+        setScreen("loading");
+        await run(async () => {
+          const sys = `English teacher. Create a lesson. Return ONLY valid JSON no markdown:
+{"summary":"3-4 sentence English summary for intermediate learners","vocabulary":[{"word":"word","pos":"noun","definition":"clear simple definition","example":"natural example sentence"}],"speakingPrompt":"Open-ended English question encouraging opinion or personal experience"}
+Exactly 5 vocabulary words.`;
+          const text = await callAI(`Create English lesson about: ${t.title}\nCategory: ${t.category}\nContext: ${t.teaser}`, sys, true);
+          setLesson(parseJSON(text));
+          setScreen("overview");
+        }, "selecting");
+      }
+
+      async function submitSpeaking() {
+        if (!userResp.trim()) return;
+        setLoadingMsg("답변을 분석하는 중");
+        setScreen("loading");
+        await run(async () => {
+          const sys = `English teacher giving speaking feedback. Return ONLY valid JSON no markdown:
+{"correctedVersion":"Naturally corrected version","corrections":[{"original":"exact phrase","correction":"better version","explanation":"short reason"}],"naturalExpressions":[{"expression":"native English phrase","usage":"when/how to use it"}],"followUpQuestion":"One engaging follow-up question in English","encouragement":"Brief encouraging comment in Korean 1-2 sentences"}
+0-3 corrections only for real errors. Exactly 3 naturalExpressions.`;
+          const text = await callAI(`Topic: ${topic.title}\nPrompt: ${lesson.speakingPrompt}\nStudent said: ${userResp}`, sys);
+          setFeedback(parseJSON(text));
+          setScreen("feedback");
+        }, "speaking");
+      }
+
+      async function submitFollowup() {
+        if (!userFollowup.trim()) return;
+        setLoadingMsg("최종 피드백을 정리하는 중");
+        setScreen("loading");
+        await run(async () => {
+          const sys = `English teacher, final feedback. Return ONLY valid JSON no markdown:
+{"correctedVersion":"corrected version","corrections":[{"original":"","correction":"","explanation":""}],"finalNote":"Warm closing in Korean about today's learning 2-3 sentences","todaysPhrases":["phrase 1","phrase 2","phrase 3"]}
+0-3 corrections. todaysPhrases: 3 memorable English expressions from today.`;
+          const text = await callAI(`Topic: ${topic.title}\nQ: ${feedback.followUpQuestion}\nAnswer: ${userFollowup}`, sys);
+          const data = parseJSON(text);
+          setFinalFb(data);
+          const newStreak = streak + 1;
+          setStreak(newStreak);
+          saveStreak(newStreak);
+          setScreen("complete");
+        }, "feedback");
+      }
+
+      function reset() {
+        setTopic(null); setLesson(null); setUserResp(""); setFeedback(null);
+        setUserFollowup(""); setFinalFb(null); setError(null); setScreen("home");
+      }
+
+      // ── Render ─────────────────────────────────────────────────────
+      return (
+        <div style={S.app}>
+          {/* Header */}
+          <div style={S.header}>
+            <div style={S.masthead}>ENGLISH DAILY</div>
+            <div style={{ textAlign: "right" }}>
+              {streak > 0 && <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: C.gold }}>🔥 {streak}일 연속</div>}
+              <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, color: C.muted, marginTop: 2 }}>
+                {new Date().toLocaleDateString("ko-KR")}
+              </div>
+            </div>
+          </div>
+
+          {/* Error */}
+          {error && (
+            <div style={{ background: "#2a0a0a", borderBottom: `1px solid #5a2020`, padding: "12px 28px", color: C.error, fontFamily: "'DM Sans', sans-serif", fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span>⚠️ {error}</span>
+              <button onClick={() => setError(null)} style={{ background: "none", border: "none", color: C.error, cursor: "pointer", fontSize: 16 }}>✕</button>
+            </div>
+          )}
+
+          <div style={S.body}>
+            {/* LOADING */}
+            {screen === "loading" && <LoadingScreen msg={loadingMsg} />}
+
+            {/* HOME */}
+            {screen === "home" && (
+              <div style={{ paddingTop: 48 }}>
+                <div style={{ ...S.label, textAlign: "center" }}>{today}</div>
+                <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 44, fontWeight: 400, lineHeight: 1.15, color: C.cream, textAlign: "center", margin: "0 0 10px" }}>
+                  오늘의 영어,<br /><span style={{ color: C.gold, fontStyle: "italic" }}>함께 시작해요</span>
+                </div>
+                <p style={{ textAlign: "center", color: C.creamMuted, fontSize: 15, lineHeight: 1.8, margin: "0 0 40px" }}>
+                  AI가 오늘의 최신 뉴스에서 주제를 선별하고<br />맞춤형 레슨, 교정, 표현까지 안내해드립니다.
+                </p>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 36 }}>
+                  {[["📰","최신 뉴스 주제"],["✍️","스피킹 + 교정"],["💬","실전 표현 학습"]].map(([e,l]) => (
+                    <div key={l} style={{ ...S.card, textAlign: "center", padding: "20px 12px" }}>
+                      <div style={{ fontSize: 24, marginBottom: 8 }}>{e}</div>
+                      <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 12, color: C.creamMuted }}>{l}</div>
+                    </div>
+                  ))}
+                </div>
+                <button style={S.btn} onClick={fetchTopics}>오늘의 주제 가져오기 →</button>
+              </div>
+            )}
+
+            {/* SELECTING */}
+            {screen === "selecting" && (
+              <div style={{ paddingTop: 36 }}>
+                <StepBar step={0} />
+                <div style={S.label}>STEP 1 — 주제 선택</div>
+                <div style={S.h2}>오늘의 주제를 선택하세요</div>
+                <p style={{ color: C.creamMuted, fontSize: 14, marginBottom: 24, lineHeight: 1.7 }}>하나를 선택하면 해당 주제로 맞춤 레슨이 시작됩니다.</p>
+                {topics.map(t => <TopicCard key={t.id} topic={t} onSelect={startLesson} />)}
+                <button style={S.btn} onClick={fetchTopics}>🔄 다른 주제 가져오기</button>
+              </div>
+            )}
+
+            {/* OVERVIEW */}
+            {screen === "overview" && lesson && (
+              <div style={{ paddingTop: 36 }}>
+                <StepBar step={1} />
+                <div style={S.label}>STEP 2 — 주제 요약 · {topic?.category?.toUpperCase()}</div>
+                <div style={S.h2}>{topic?.title}</div>
+                <p style={{ color: C.creamMuted, fontSize: 13, fontFamily: "'DM Sans', sans-serif", marginBottom: 24 }}>{topic?.difficulty} · {topic?.emoji}</p>
+                <div style={S.card}>
+                  <div style={S.h3}>📋 Topic Summary</div>
+                  <p style={{ color: C.cream, lineHeight: 1.85, fontSize: 15, margin: 0 }}>{lesson.summary}</p>
+                </div>
+                <div style={S.card}>
+                  <div style={S.h3}>📚 Key Vocabulary</div>
+                  {lesson.vocabulary?.map((v, i) => (
+                    <div key={i} style={{ background: "#0a1220", border: `1px solid ${C.cardBorder}`, borderRadius: 8, padding: "14px 16px", marginBottom: 10 }}>
+                      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 5 }}>
+                        <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 600, color: C.goldLight }}>{v.word}</span>
+                        <span style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, color: C.muted }}>{v.pos}</span>
+                      </div>
+                      <div style={{ fontSize: 14, color: C.cream, marginBottom: 5 }}>{v.definition}</div>
+                      <div style={{ fontSize: 13, color: C.creamMuted, fontStyle: "italic" }}>"{v.example}"</div>
+                    </div>
+                  ))}
+                </div>
+                <button style={S.btn} onClick={() => setScreen("speaking")}>스피킹 연습 시작하기 →</button>
+              </div>
+            )}
+
+            {/* SPEAKING */}
+            {screen === "speaking" && lesson && (
+              <div style={{ paddingTop: 36 }}>
+                <StepBar step={2} />
+                <div style={S.label}>STEP 3 — 스피킹 연습</div>
+                <div style={S.h2}>나의 생각을 말해보세요</div>
+                <p style={{ color: C.creamMuted, fontSize: 13, fontFamily: "'DM Sans', sans-serif", marginBottom: 24 }}>먼저 소리 내어 말해보고, 영어로 작성해보세요.</p>
+                <div style={{ ...S.card, borderLeft: `3px solid ${C.gold}`, background: "#0d1520" }}>
+                  <div style={S.h3}>💬 Speaking Prompt</div>
+                  <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 22, lineHeight: 1.5, color: C.cream }}>{lesson.speakingPrompt}</div>
+                </div>
+                <div style={S.card}>
+                  <div style={S.h3}>✍️ Your Response</div>
+                  <textarea style={S.textarea} value={userResp} onChange={e => setUserResp(e.target.value)}
+                    placeholder="Type your English response here... (try at least 3-4 sentences)" />
+                  <div style={{ fontSize: 12, color: C.muted, marginTop: 8, fontFamily: "'DM Sans', sans-serif" }}>
+                    {userResp.trim() ? `${userResp.trim().split(/\s+/).length} words` : "Try to write at least 3-4 sentences"}
+                  </div>
+                </div>
+                <button style={{ ...S.btn, opacity: userResp.trim() ? 1 : 0.4 }} onClick={submitSpeaking} disabled={!userResp.trim()}>피드백 받기 →</button>
+                <button style={S.btnSec} onClick={() => setScreen("overview")}>← 주제 요약으로</button>
+              </div>
+            )}
+
+            {/* FEEDBACK */}
+            {screen === "feedback" && feedback && (
+              <div style={{ paddingTop: 36 }}>
+                <StepBar step={3} />
+                <div style={S.label}>STEP 4 — 피드백</div>
+                <div style={S.h2}>피드백 결과</div>
+                <p style={{ color: C.gold, fontSize: 14, fontFamily: "'DM Sans', sans-serif", marginBottom: 24, fontStyle: "italic" }}>{feedback.encouragement}</p>
+                <div style={S.card}>
+                  <div style={S.h3}>✅ 교정된 버전</div>
+                  <p style={{ color: C.success, lineHeight: 1.8, fontSize: 15, margin: 0, fontStyle: "italic" }}>{feedback.correctedVersion}</p>
+                </div>
+                {feedback.corrections?.length > 0 && (
+                  <div style={S.card}>
+                    <div style={S.h3}>📝 교정 포인트</div>
+                    {feedback.corrections.map((c, i) => (
+                      <div key={i} style={{ background: "#0a1220", border: `1px solid ${C.cardBorder}`, borderRadius: 8, padding: "12px 16px", marginBottom: 10 }}>
+                        <div style={{ fontSize: 13, color: C.error, textDecoration: "line-through", marginBottom: 4, fontStyle: "italic" }}>{c.original}</div>
+                        <div style={{ fontSize: 14, color: C.success, marginBottom: 4 }}>→ {c.correction}</div>
+                        <div style={{ fontSize: 12, color: C.creamMuted, fontFamily: "'DM Sans', sans-serif" }}>{c.explanation}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {feedback.corrections?.length === 0 && (
+                  <div style={{ ...S.card, borderColor: "#1e3a2a", background: "#0a1a0f" }}>
+                    <div style={{ color: C.success, fontFamily: "'DM Sans', sans-serif", fontSize: 14 }}>🎉 훌륭해요! 교정할 부분이 없습니다.</div>
+                  </div>
+                )}
+                <div style={S.card}>
+                  <div style={S.h3}>⚡ 자연스러운 표현 3가지</div>
+                  {feedback.naturalExpressions?.map((e, i) => (
+                    <div key={i} style={{ background: "#0a1220", border: `1px solid #1e3a2a`, borderRadius: 8, padding: "12px 16px", marginBottom: 10 }}>
+                      <div style={{ fontSize: 15, fontFamily: "'Cormorant Garamond', serif", color: C.goldLight, marginBottom: 4 }}>"{e.expression}"</div>
+                      <div style={{ fontSize: 12, color: C.creamMuted, fontFamily: "'DM Sans', sans-serif" }}>{e.usage}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ ...S.card, borderLeft: `3px solid ${C.gold}` }}>
+                  <div style={S.h3}>💬 Follow-up Question</div>
+                  <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 20, color: C.cream, marginBottom: 16 }}>{feedback.followUpQuestion}</div>
+                  <textarea style={S.textarea} value={userFollowup} onChange={e => setUserFollowup(e.target.value)}
+                    placeholder="Answer this follow-up question in English..." />
+                </div>
+                <button style={{ ...S.btn, opacity: userFollowup.trim() ? 1 : 0.4 }} onClick={submitFollowup} disabled={!userFollowup.trim()}>레슨 완료하기 →</button>
+              </div>
+            )}
+
+            {/* COMPLETE */}
+            {screen === "complete" && finalFb && (
+              <div style={{ paddingTop: 48 }}>
+                <div style={{ textAlign: "center", marginBottom: 32 }}>
+                  <div style={{ fontSize: 48, marginBottom: 12 }}>🎉</div>
+                  <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 36, color: C.gold, marginBottom: 12 }}>오늘의 학습 완료!</div>
+                  <div style={{ display: "inline-block", background: C.gold + "22", border: `1px solid ${C.gold}`, borderRadius: 20, padding: "6px 20px", fontFamily: "'DM Sans', sans-serif", fontSize: 14, color: C.gold }}>
+                    🔥 {streak}일 연속 학습 중
+                  </div>
+                </div>
+                {finalFb.corrections?.length > 0 && (
+                  <div style={S.card}>
+                    <div style={S.h3}>📝 마지막 교정</div>
+                    {finalFb.corrections.map((c, i) => (
+                      <div key={i} style={{ background: "#0a1220", border: `1px solid ${C.cardBorder}`, borderRadius: 8, padding: "12px 16px", marginBottom: 10 }}>
+                        <div style={{ fontSize: 13, color: C.error, textDecoration: "line-through", marginBottom: 4, fontStyle: "italic" }}>{c.original}</div>
+                        <div style={{ fontSize: 14, color: C.success, marginBottom: 4 }}>→ {c.correction}</div>
+                        <div style={{ fontSize: 12, color: C.creamMuted }}>{c.explanation}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div style={S.card}>
+                  <div style={S.h3}>💡 오늘 배운 표현들</div>
+                  {finalFb.todaysPhrases?.map((p, i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "#0a1220", borderRadius: 8, marginBottom: 8 }}>
+                      <span style={{ color: C.gold, fontFamily: "'DM Sans', sans-serif", fontWeight: 600 }}>{String(i + 1).padStart(2, "0")}</span>
+                      <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 17, color: C.cream }}>{p}</span>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ ...S.card, borderColor: "#1e3a2a", background: "#091510" }}>
+                  <div style={{ color: C.creamMuted, lineHeight: 1.8, fontSize: 15 }}>{finalFb.finalNote}</div>
+                </div>
+                <button style={S.btn} onClick={reset}>홈으로 돌아가기</button>
+                <button style={S.btnSec} onClick={() => { reset(); setTimeout(fetchTopics, 100); }}>다른 주제로 한 번 더 →</button>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
