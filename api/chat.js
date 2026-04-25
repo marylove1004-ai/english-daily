@@ -38,7 +38,7 @@ export default async function handler(req) {
       parts: [{ text: m.content }],
     })),
     generationConfig: {
-      maxOutputTokens: 2000,
+      maxOutputTokens: 4000,
       temperature: 0.7,
       thinkingConfig: {
         thinkingBudget: 0,  // thinking 비활성화 (JSON 응답 안정성)
