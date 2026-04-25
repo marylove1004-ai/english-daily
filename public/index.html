@@ -49,9 +49,15 @@
     }
 
     function parseJSON(text) {
-      const clean = text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-      return JSON.parse(clean);
-    }
+  const clean = text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+  // Gemini가 JSON 앞에 설명 텍스트를 붙이는 경우 대비
+  const start = clean.indexOf('{');
+  const end = clean.lastIndexOf('}');
+  if (start !== -1 && end !== -1) {
+    return JSON.parse(clean.slice(start, end + 1));
+  }
+  return JSON.parse(clean);
+}
 
     // ── TTS (브라우저 내장 음성) ─────────────────────────────────────
     function speak(text, onEnd) {
