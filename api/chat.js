@@ -1,15 +1,17 @@
-// api/chat.js — Vercel Edge Function
-// Anthropic API 프록시 (API 키를 서버에서만 보관)
+// api/chat.js — Vercel Edge Function (Gemini 버전)
+// Anthropic 형식 요청을 받아 Gemini API로 변환하여 전달
 
 export const config = { runtime: 'edge' };
 
+const GEMINI_MODEL = 'gemini-2.0-flash';
+const GEMINI_URL   = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+
 export default async function handler(req) {
-  // CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, {
       status: 204,
       headers: {
-        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Origin':  '*',
         'Access-Control-Allow-Methods': 'POST, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type',
       },
@@ -20,31 +22,69 @@ export default async function handler(req) {
     return new Response('Method not allowed', { status: 405 });
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    return new Response(JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured' }), {
+    return new Response(JSON.stringify({ error: 'GEMINI_API_KEY not configured' }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },
     });
   }
 
-  const body = await req.text();
+  // ── Anthropic 형식 → Gemini 형식 변환 ──────────────────────
+  const anthropicBody = await req.json();
+  const { system, messages, max_tokens, tools } = anthropicBody;
 
-  const upstream = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type':      'application/json',
-      'x-api-key':         apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-beta':    'web-search-2025-03-05',
+  const geminiBody = {
+    contents: messages.map(m => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content }],
+    })),
+    generationConfig: {
+      maxOutputTokens: max_tokens || 1000,
+      temperature: 0.7,
     },
-    body,
+  };
+
+  // 시스템 프롬프트
+  if (system) {
+    geminiBody.systemInstruction = { parts: [{ text: system }] };
+  }
+
+  // 웹 검색 도구 (뉴스 주제 가져올 때)
+  const wantsSearch = tools?.some(t => t.name === 'web_search' || t.type?.includes('web_search'));
+  if (wantsSearch) {
+    geminiBody.tools = [{ googleSearch: {} }];
+  }
+
+  // ── Gemini API 호출 ─────────────────────────────────────────
+  const upstream = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(geminiBody),
   });
 
-  const data = await upstream.text();
+  if (!upstream.ok) {
+    const errText = await upstream.text();
+    return new Response(JSON.stringify({ error: `Gemini API error: ${upstream.status}`, detail: errText }), {
+      status: upstream.status,
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+    });
+  }
 
-  return new Response(data, {
-    status: upstream.status,
+  const geminiData = await upstream.json();
+
+  // ── Gemini 응답 → Anthropic 형식으로 변환 ──────────────────
+  const text = geminiData.candidates?.[0]?.content?.parts
+    ?.filter(p => p.text)
+    ?.map(p => p.text)
+    ?.join('') || '';
+
+  const anthropicResponse = {
+    content: [{ type: 'text', text }],
+  };
+
+  return new Response(JSON.stringify(anthropicResponse), {
+    status: 200,
     headers: {
       'Content-Type': 'application/json',
       'Access-Control-Allow-Origin': '*',
