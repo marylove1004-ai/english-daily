@@ -15,551 +15,515 @@
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: #0f1623; }
     ::-webkit-scrollbar-thumb { background: #1e2d45; border-radius: 3px; }
-    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
-    .speaking-pulse { animation: pulse 1.5s infinite; }
+    @keyframes pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.08)} }
+    @keyframes ripple { 0%{transform:scale(1);opacity:0.6} 100%{transform:scale(2.2);opacity:0} }
+    .mic-pulse { animation: pulse 1s infinite; }
+    .ripple::after { content:''; position:absolute; inset:0; border-radius:50%; border:2px solid #e8b84b; animation:ripple 1.2s infinite; }
   </style>
 </head>
 <body>
   <div id="root"></div>
-
   <script type="text/babel">
     const { useState, useEffect, useRef } = React;
 
-    // ── API ─────────────────────────────────────────────────────────
     async function callAI(userMsg, system, useSearch = false) {
-      const body = {
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 1500,
-        system,
-        messages: [{ role: "user", content: userMsg }],
-      };
-      if (useSearch) body.tools = [{ type: "web_search_20250305", name: "web_search" }];
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || "API 오류: " + res.status);
-      }
+      const body = { model:"claude-sonnet-4-20250514", max_tokens:1500, system, messages:[{role:"user",content:userMsg}] };
+      if (useSearch) body.tools = [{type:"web_search_20250305",name:"web_search"}];
+      const res = await fetch("/api/chat", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+      if (!res.ok) { const e=await res.json().catch(()=>({})); throw new Error(e.error||"API 오류"); }
       const data = await res.json();
       if (data.error) throw new Error(data.error);
-      return data.content.filter(b => b.type === "text").map(b => b.text).join("");
+      return data.content.filter(b=>b.type==="text").map(b=>b.text).join("");
     }
 
-function parseJSON(text) {
-  let clean = text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-  const start = clean.indexOf('{');
-  const end = clean.lastIndexOf('}');
-  if (start !== -1 && end !== -1) clean = clean.slice(start, end + 1);
-  try {
-    return JSON.parse(clean);
-  } catch {
-    // 줄바꿈 제거 후 재시도
-    clean = clean.replace(/[\r\n]+/g, " ").replace(/,\s*([}\]])/g, '$1');
-    try {
-      return JSON.parse(clean);
-    } catch {
-      // 문자열 내 특수문자 이스케이프 후 재시도
-      clean = clean.replace(/([^\\])'(?=[^,}\]:])/g, "$1\\'");
-      return JSON.parse(clean);
+    function parseJSON(text) {
+      let c = text.replace(/```json\n?/g,"").replace(/```\n?/g,"").trim();
+      const s=c.indexOf('{'), e=c.lastIndexOf('}');
+      if(s!==-1&&e!==-1) c=c.slice(s,e+1);
+      try{return JSON.parse(c);}
+      catch{ c=c.replace(/[\r\n]+/g," ").replace(/,\s*([}\]])/g,'$1'); return JSON.parse(c); }
     }
-  }
-}
 
-    // ── TTS (브라우저 내장 음성) ─────────────────────────────────────
-    function speak(text, onEnd) {
+    function speak(text, rate=0.85, onEnd) {
       window.speechSynthesis.cancel();
-      const utt = new SpeechSynthesisUtterance(text);
-      utt.lang = "en-US";
-      utt.rate = 0.9;
-      utt.pitch = 1;
-      // 영어 목소리 우선 선택
-      const voices = window.speechSynthesis.getVoices();
-      const enVoice = voices.find(v => v.lang.startsWith("en") && v.name.includes("Google"))
-        || voices.find(v => v.lang.startsWith("en-US"))
-        || voices.find(v => v.lang.startsWith("en"));
-      if (enVoice) utt.voice = enVoice;
-      if (onEnd) utt.onend = onEnd;
-      window.speechSynthesis.speak(utt);
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang="en-US"; u.rate=rate;
+      const voices=window.speechSynthesis.getVoices();
+      const v=voices.find(v=>v.lang==="en-US"&&v.name.includes("Google"))||voices.find(v=>v.lang.startsWith("en"));
+      if(v) u.voice=v;
+      if(onEnd) u.onend=onEnd;
+      window.speechSynthesis.speak(u);
     }
-    function stopSpeak() { window.speechSynthesis.cancel(); }
+    function stopSpeak(){window.speechSynthesis.cancel();}
 
-    // ── Streak ───────────────────────────────────────────────────────
-    function loadStreak() {
-      try {
-        const d = JSON.parse(localStorage.getItem("eng_streak") || "{}");
-        const yesterday = new Date(Date.now() - 86400000).toDateString();
-        if (d.lastDate === new Date().toDateString()) return d.streak || 0;
-        if (d.lastDate === yesterday) return d.streak || 0;
+    const SR = window.SpeechRecognition||window.webkitSpeechRecognition;
+    const hasMic = !!SR;
+
+    function loadStreak(){
+      try{
+        const d=JSON.parse(localStorage.getItem("eng_streak")||"{}");
+        const today=new Date().toDateString(), yesterday=new Date(Date.now()-86400000).toDateString();
+        if(d.lastDate===today||d.lastDate===yesterday) return d.streak||0;
         return 0;
-      } catch { return 0; }
+      }catch{return 0;}
     }
-    function saveStreak(n) {
-      localStorage.setItem("eng_streak", JSON.stringify({ streak: n, lastDate: new Date().toDateString() }));
-    }
+    function saveStreak(n){localStorage.setItem("eng_streak",JSON.stringify({streak:n,lastDate:new Date().toDateString()}));}
 
-    // ── Design ───────────────────────────────────────────────────────
-    const C = {
-      bg: "#080d16", card: "#0f1623", cardBorder: "#1e2d45",
-      cream: "#f0e8d5", creamMuted: "#a89880",
-      gold: "#c8962a", goldLight: "#e8b84b",
-      success: "#34d399", error: "#f87171", muted: "#4a5568",
-      blue: "#3b8eff",
-    };
-    const CAT_COLOR = {
-      "World News": "#3b82f6", "Business": "#f59e0b",
-      "Technology": "#8b5cf6", "Entertainment": "#ec4899", "Science & Health": "#10b981",
-    };
-    const S = {
-      app: { minHeight: "100vh", background: C.bg, color: C.cream, fontFamily: "'Lora', Georgia, serif", paddingBottom: 60 },
-      header: { borderBottom: `1px solid ${C.cardBorder}`, padding: "18px 28px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: C.bg, zIndex: 100 },
-      masthead: { fontFamily: "'Cormorant Garamond', serif", fontSize: 22, fontWeight: 600, letterSpacing: "0.08em", color: C.gold },
-      body: { maxWidth: 680, margin: "0 auto", padding: "0 20px" },
-      card: { background: C.card, border: `1px solid ${C.cardBorder}`, borderRadius: 12, padding: "24px 28px", marginBottom: 16 },
-      btn: { background: C.gold, color: C.bg, border: "none", borderRadius: 8, padding: "14px 28px", fontSize: 15, fontWeight: 600, fontFamily: "'DM Sans', sans-serif", cursor: "pointer", width: "100%", letterSpacing: "0.02em" },
-      btnSec: { background: "transparent", color: C.creamMuted, border: `1px solid ${C.cardBorder}`, borderRadius: 8, padding: "12px 24px", fontSize: 14, fontFamily: "'DM Sans', sans-serif", cursor: "pointer", width: "100%", marginTop: 10 },
-      label: { fontFamily: "'DM Sans', sans-serif", fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase", color: C.creamMuted, marginBottom: 8, display: "block" },
-      h2: { fontFamily: "'Cormorant Garamond', serif", fontSize: 26, fontWeight: 600, color: C.cream, margin: "0 0 6px" },
-      h3: { fontFamily: "'DM Sans', sans-serif", fontSize: 13, fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", color: C.gold, margin: "0 0 12px" },
-      textarea: { width: "100%", background: "#0a1220", border: `1px solid ${C.cardBorder}`, borderRadius: 8, padding: 16, color: C.cream, fontFamily: "'Lora', serif", fontSize: 15, lineHeight: 1.7, resize: "vertical", outline: "none", boxSizing: "border-box", minHeight: 140 },
+    const C={bg:"#080d16",card:"#0f1623",cardBorder:"#1e2d45",cream:"#f0e8d5",creamMuted:"#a89880",gold:"#c8962a",goldLight:"#e8b84b",success:"#34d399",error:"#f87171",muted:"#4a5568",blue:"#3b8eff"};
+    const CAT_COLOR={"World News":"#3b82f6","Business":"#f59e0b","Technology":"#8b5cf6","Entertainment":"#ec4899","Science & Health":"#10b981"};
+    const S={
+      app:{minHeight:"100vh",background:C.bg,color:C.cream,fontFamily:"'Lora',Georgia,serif",paddingBottom:60},
+      header:{borderBottom:`1px solid ${C.cardBorder}`,padding:"16px 22px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",position:"sticky",top:0,background:C.bg,zIndex:100},
+      masthead:{fontFamily:"'Cormorant Garamond',serif",fontSize:20,fontWeight:600,letterSpacing:"0.08em",color:C.gold},
+      body:{maxWidth:680,margin:"0 auto",padding:"0 16px"},
+      card:{background:C.card,border:`1px solid ${C.cardBorder}`,borderRadius:12,padding:"18px 20px",marginBottom:12},
+      btn:{background:C.gold,color:C.bg,border:"none",borderRadius:10,padding:"15px 28px",fontSize:15,fontWeight:600,fontFamily:"'DM Sans',sans-serif",cursor:"pointer",width:"100%"},
+      btnSec:{background:"transparent",color:C.creamMuted,border:`1px solid ${C.cardBorder}`,borderRadius:10,padding:"12px 24px",fontSize:14,fontFamily:"'DM Sans',sans-serif",cursor:"pointer",width:"100%",marginTop:10},
+      label:{fontFamily:"'DM Sans',sans-serif",fontSize:11,letterSpacing:"0.12em",textTransform:"uppercase",color:C.creamMuted,marginBottom:8,display:"block"},
+      h2:{fontFamily:"'Cormorant Garamond',serif",fontSize:26,fontWeight:600,color:C.cream,margin:"0 0 6px"},
+      h3:{fontFamily:"'DM Sans',sans-serif",fontSize:12,fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",color:C.gold,margin:"0 0 10px"},
+      textarea:{width:"100%",background:"#0a1220",border:`1px solid ${C.cardBorder}`,borderRadius:8,padding:14,color:C.cream,fontFamily:"'Lora',serif",fontSize:15,lineHeight:1.7,resize:"vertical",outline:"none",boxSizing:"border-box",minHeight:110},
     };
 
-    // ── Sub Components ───────────────────────────────────────────────
-    function LoadingScreen({ msg }) {
-      const [dots, setDots] = useState(".");
-      useEffect(() => {
-        const t = setInterval(() => setDots(d => d.length >= 3 ? "." : d + "."), 500);
-        return () => clearInterval(t);
-      }, []);
-      return (
-        <div style={{ textAlign: "center", padding: "80px 20px" }}>
-          <div style={{ fontSize: 40, marginBottom: 20 }}>🎧</div>
-          <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 24, color: C.cream, marginBottom: 8 }}>{msg}{dots}</div>
-          <div style={{ color: C.muted, fontSize: 13, fontFamily: "'DM Sans', sans-serif" }}>잠시만 기다려주세요</div>
-        </div>
-      );
-    }
-
-    function StepBar({ step }) {
-      const steps = ["주제", "스피킹", "피드백", "완료"];
-      return (
-        <div style={{ display: "flex", alignItems: "center", marginBottom: 28, marginTop: 4 }}>
-          {steps.map((s, i) => (
-            <div key={i} style={{ display: "flex", alignItems: "center", flex: i < steps.length - 1 ? 1 : 0 }}>
-              <div style={{
-                width: 28, height: 28, borderRadius: "50%",
-                background: i < step ? C.gold : i === step ? C.goldLight : C.cardBorder,
-                color: i <= step ? C.bg : C.muted,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: 11, fontFamily: "'DM Sans', sans-serif", fontWeight: 700, flexShrink: 0,
-              }}>
-                {i < step ? "✓" : i + 1}
+    function StepBar({step}){
+      const steps=["주제","듣기","쉐도잉","말하기","피드백"];
+      return(
+        <div style={{display:"flex",alignItems:"center",marginBottom:22,marginTop:4}}>
+          {steps.map((s,i)=>(
+            <div key={i} style={{display:"flex",alignItems:"center",flex:i<steps.length-1?1:0}}>
+              <div title={s} style={{width:25,height:25,borderRadius:"50%",background:i<step?C.gold:i===step?C.goldLight:C.cardBorder,color:i<=step?C.bg:C.muted,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontFamily:"'DM Sans',sans-serif",fontWeight:700,flexShrink:0}}>
+                {i<step?"✓":i+1}
               </div>
-              {i < steps.length - 1 && (
-                <div style={{ flex: 1, height: 1, background: i < step ? C.gold : C.cardBorder, margin: "0 4px" }} />
-              )}
+              {i<steps.length-1&&<div style={{flex:1,height:1,background:i<step?C.gold:C.cardBorder,margin:"0 3px"}}/>}
             </div>
           ))}
         </div>
       );
     }
 
-    function TopicCard({ topic, onSelect }) {
-      const [hov, setHov] = useState(false);
-      const diff = { Beginner: "#34d399", Intermediate: C.gold, Advanced: "#f87171" };
-      return (
-        <div onClick={() => onSelect(topic)}
-          onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
-          style={{ ...S.card, cursor: "pointer", border: `1px solid ${hov ? C.gold : C.cardBorder}`, transition: "all 0.2s", transform: hov ? "translateY(-2px)" : "none" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 20 }}>{topic.emoji}</span>
-              <span style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: CAT_COLOR[topic.category] || C.gold }}>
-                {topic.category}
-              </span>
-            </div>
-            <span style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, color: diff[topic.difficulty] || C.gold, background: (diff[topic.difficulty] || C.gold) + "22", borderRadius: 20, padding: "3px 10px" }}>
-              {topic.difficulty}
-            </span>
-          </div>
-          <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 600, color: C.cream, marginBottom: 6 }}>{topic.title}</div>
-          <div style={{ fontSize: 14, color: C.creamMuted, lineHeight: 1.6 }}>{topic.teaser}</div>
-        </div>
-      );
-    }
-
-    // TTS 버튼 컴포넌트
-    function SpeakButton({ text, label = "🔊 듣기" }) {
-      const [playing, setPlaying] = useState(false);
-      function toggle() {
-        if (playing) { stopSpeak(); setPlaying(false); }
-        else { setPlaying(true); speak(text, () => setPlaying(false)); }
+    function ListenBtn({text,rate=0.85,label="🔊 듣기",full=false}){
+      const [playing,setPlaying]=useState(false);
+      function toggle(){
+        if(playing){stopSpeak();setPlaying(false);}
+        else{setPlaying(true);speak(text,rate,()=>setPlaying(false));}
       }
-      return (
-        <button onClick={toggle} style={{
-          background: playing ? "#1e3a5f" : "#0d1f35",
-          border: `1px solid ${playing ? C.blue : C.cardBorder}`,
-          borderRadius: 8, padding: "10px 18px",
-          color: playing ? C.blue : C.creamMuted,
-          fontFamily: "'DM Sans', sans-serif", fontSize: 13,
-          cursor: "pointer", display: "flex", alignItems: "center", gap: 8,
-        }}>
-          <span className={playing ? "speaking-pulse" : ""}>{playing ? "⏹ 중지" : label}</span>
+      return(
+        <button onClick={toggle} style={{background:playing?"#1e3a5f":"#0d1f35",border:`1px solid ${playing?C.blue:C.cardBorder}`,borderRadius:8,padding:"8px 14px",color:playing?C.blue:C.creamMuted,fontFamily:"'DM Sans',sans-serif",fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",gap:6,width:full?"100%":"auto",justifyContent:full?"center":"flex-start"}}>
+          {playing?"⏹ 중지":label}
         </button>
       );
     }
 
-    // ── Main App ─────────────────────────────────────────────────────
-    function App() {
-      const [screen, setScreen] = useState("home");
-      const [streak, setStreak] = useState(0);
-      const [topics, setTopics] = useState([]);
-      const [topic, setTopic] = useState(null);
-      const [lesson, setLesson] = useState(null);
-      const [userResp, setUserResp] = useState("");
-      const [feedback, setFeedback] = useState(null);
-      const [userFollowup, setUserFollowup] = useState("");
-      const [finalFb, setFinalFb] = useState(null);
-      const [loadingMsg, setLoadingMsg] = useState("");
-      const [error, setError] = useState(null);
-      const [vocabOpen, setVocabOpen] = useState(false);
+    function TopicCard({topic,onSelect}){
+      const [hov,setHov]=useState(false);
+      const diff={Beginner:"#34d399",Intermediate:C.gold,Advanced:"#f87171"};
+      return(
+        <div onClick={()=>onSelect(topic)} onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
+          style={{...S.card,cursor:"pointer",border:`1px solid ${hov?C.gold:C.cardBorder}`,transition:"all 0.2s",transform:hov?"translateY(-2px)":"none"}}>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontSize:18}}>{topic.emoji}</span>
+              <span style={{fontFamily:"'DM Sans',sans-serif",fontSize:10,letterSpacing:"0.1em",textTransform:"uppercase",color:CAT_COLOR[topic.category]||C.gold}}>{topic.category}</span>
+            </div>
+            <span style={{fontFamily:"'DM Sans',sans-serif",fontSize:11,color:diff[topic.difficulty]||C.gold,background:(diff[topic.difficulty]||C.gold)+"22",borderRadius:20,padding:"2px 10px"}}>{topic.difficulty}</span>
+          </div>
+          <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:19,fontWeight:600,color:C.cream,marginBottom:4}}>{topic.title}</div>
+          <div style={{fontSize:13,color:C.creamMuted,lineHeight:1.6}}>{topic.teaser}</div>
+        </div>
+      );
+    }
 
-      useEffect(() => { setStreak(loadStreak()); }, []);
+    function MicButton({onTranscript}){
+      const [state,setState]=useState("idle");
+      const [interim,setInterim]=useState("");
+      const recRef=useRef(null);
+      function startListen(){
+        if(!SR) return;
+        stopSpeak();
+        const rec=new SR();
+        rec.lang="en-US"; rec.continuous=true; rec.interimResults=true;
+        rec.onresult=(e)=>{
+          let fin="",inter="";
+          for(let r of e.results){if(r.isFinal)fin+=r[0].transcript+" ";else inter+=r[0].transcript;}
+          if(fin) onTranscript(p=>p+fin);
+          setInterim(inter);
+        };
+        rec.onerror=()=>{setState("idle");setInterim("");};
+        rec.onend=()=>{setState("done");setInterim("");};
+        recRef.current=rec; rec.start(); setState("listening");
+      }
+      function stopListen(){recRef.current?.stop(); setState("done"); setInterim("");}
+      return(
+        <div style={{textAlign:"center",padding:"14px 0"}}>
+          <div style={{position:"relative",display:"inline-block",marginBottom:10}}>
+            <button onClick={state==="listening"?stopListen:startListen}
+              className={state==="listening"?"mic-pulse ripple":""}
+              style={{width:76,height:76,borderRadius:"50%",background:state==="listening"?"#c8962a22":state==="done"?"#1e3a2a":"#1e2d45",border:`2px solid ${state==="listening"?C.gold:state==="done"?C.success:C.cardBorder}`,fontSize:30,cursor:"pointer",position:"relative",display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.2s"}}>
+              {state==="listening"?"⏹":state==="done"?"✓":"🎤"}
+            </button>
+          </div>
+          <div style={{fontFamily:"'DM Sans',sans-serif",fontSize:13,color:state==="listening"?C.gold:state==="done"?C.success:C.creamMuted}}>
+            {state==="listening"?"듣는 중... 말을 마치면 자동 종료됩니다":state==="done"?"녹음 완료":"버튼을 누르고 영어로 말하세요"}
+          </div>
+          {interim&&<div style={{marginTop:6,color:C.creamMuted,fontSize:13,fontStyle:"italic",padding:"0 20px"}}>{interim}</div>}
+        </div>
+      );
+    }
 
-      const today = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+    function App(){
+      const [screen,setScreen]=useState("home");
+      const [streak,setStreak]=useState(0);
+      const [topics,setTopics]=useState([]);
+      const [topic,setTopic]=useState(null);
+      const [lesson,setLesson]=useState(null);
+      const [done,setDone]=useState([]);
+      const [userResp,setUserResp]=useState("");
+      const [feedback,setFeedback]=useState(null);
+      const [followup,setFollowup]=useState("");
+      const [finalFb,setFinalFb]=useState(null);
+      const [loadingMsg,setLoadingMsg]=useState("");
+      const [error,setError]=useState(null);
 
-      async function run(fn, fallbackScreen) {
+      useEffect(()=>{setStreak(loadStreak());},[]);
+
+      async function run(fn,fb){
         setError(null);
-        try { await fn(); }
-        catch (e) { setError(e.message || "오류가 발생했습니다."); if (fallbackScreen) setScreen(fallbackScreen); }
+        try{await fn();}
+        catch(e){setError(e.message||"오류 발생");if(fb)setScreen(fb);}
       }
 
-      async function fetchTopics() {
-        setLoadingMsg("최신 뉴스를 검색하는 중");
-        setScreen("loading");
-        await run(async () => {
-          const sys = `English learning assistant. Search the web for today's 5 diverse interesting topics. Return ONLY valid JSON no markdown:
-{"topics":[{"id":1,"category":"World News","emoji":"🌍","title":"Short title max 8 words","teaser":"One engaging sentence in English","difficulty":"Intermediate"}]}
-Categories: World News, Business, Technology, Entertainment, Science & Health. Difficulty: Beginner/Intermediate/Advanced.`;
-          const text = await callAI("Find 5 diverse interesting current news topics for English learners today.", sys, true);
-          setTopics(parseJSON(text).topics);
-          setScreen("selecting");
-        }, "home");
+      async function fetchTopics(){
+        setLoadingMsg("오늘의 뉴스 검색 중"); setScreen("loading");
+        await run(async()=>{
+          const sys=`English learning assistant. Search for today's 5 diverse topics. Return ONLY valid JSON no markdown:
+{"topics":[{"id":1,"category":"World News","emoji":"🌍","title":"Short title","teaser":"One engaging English sentence","difficulty":"Intermediate"}]}
+Categories: World News, Business, Technology, Entertainment, Science & Health.`;
+          const t=await callAI("Find 5 diverse current news topics for English learners today.",sys,true);
+          setTopics(parseJSON(t).topics); setScreen("selecting");
+        },"home");
       }
 
-      async function startLesson(t) {
-        setTopic(t);
-        setVocabOpen(false);
-        setLoadingMsg("레슨을 준비하는 중");
-        setScreen("loading");
-        await run(async () => {
-          // 읽기 최소화: 짧은 요약 + 핵심 어휘 3개 + 스피킹 프롬프트 2개
-          const sys = `English teacher. Return ONLY valid JSON no markdown:
-{"summary":"2 sentence English summary, simple and clear","vocabulary":[{"word":"word","pos":"noun","definition":"한국어로 간단한 뜻","example":"natural example sentence"}],"prompts":[{"question":"First open-ended speaking question about this topic","level":"Basic"},{"question":"Second deeper follow-up speaking question","level":"Advanced"}]}
-Exactly 3 vocabulary words. Definitions must be in Korean. 2 speaking prompts.`;
-          const text = await callAI(`Create English speaking lesson about: ${t.title}\nCategory: ${t.category}\nContext: ${t.teaser}`, sys, true);
-          setLesson(parseJSON(text));
-          setScreen("overview");
-        }, "selecting");
+      async function startLesson(t){
+        setTopic(t); setDone([]);
+        setLoadingMsg("리스닝 콘텐츠 준비 중"); setScreen("loading");
+        await run(async()=>{
+          const sys=`English teacher. Return ONLY valid JSON no markdown:
+{"summary":"2 clear English sentences about the topic","shadowSentences":[{"text":"natural English sentence","meaning":"한국어 뜻"},{"text":"...","meaning":"..."},{"text":"...","meaning":"..."},{"text":"...","meaning":"..."},{"text":"...","meaning":"..."}],"expressions":[{"phrase":"key phrase","korean":"한국어 의미","example":"example sentence"},{"phrase":"...","korean":"...","example":"..."},{"phrase":"...","korean":"...","example":"..."}],"speakingQuestion":"Open-ended English question about this topic"}
+Exactly 5 shadowSentences (short, natural). Exactly 3 expressions.`;
+          const t2=await callAI(`Listening lesson for: ${t.title}\nContext: ${t.teaser}`,sys,true);
+          setLesson(parseJSON(t2)); setScreen("listening");
+        },"selecting");
       }
 
-      async function submitSpeaking() {
-        if (!userResp.trim()) return;
-        setLoadingMsg("답변을 분석하는 중");
-        setScreen("loading");
-        await run(async () => {
-          const sys = `English teacher giving speaking feedback. Return ONLY valid JSON no markdown.
-IMPORTANT: All explanations, corrections, and expression usage notes must be written in Korean (한국어).
-{"correctedVersion":"Naturally corrected English version of student response","corrections":[{"original":"exact phrase student used","correction":"better English version","explanation":"왜 틀렸는지 한국어로 설명"}],"naturalExpressions":[{"expression":"native English phrase","usage":"이 표현을 언제 어떻게 쓰는지 한국어로 설명"}],"followUpQuestion":"One engaging follow-up question in English","encouragement":"짧은 격려 한마디 한국어로"}
-0-3 corrections only for real errors. Exactly 3 naturalExpressions.`;
-          const text = await callAI(`Topic: ${topic.title}\nPrompt: ${lesson.prompts[0].question}\nStudent said: ${userResp}`, sys);
-          setFeedback(parseJSON(text));
-          setScreen("feedback");
-        }, "speaking");
+      async function submitSpeaking(){
+        if(!userResp.trim()) return;
+        setLoadingMsg("답변 분석 중"); setScreen("loading");
+        await run(async()=>{
+          const sys=`English teacher. Return ONLY valid JSON no markdown. All explanations in Korean.
+{"correctedVersion":"corrected English","corrections":[{"original":"phrase","correction":"better","explanation":"한국어 이유"}],"naturalExpressions":[{"expression":"native phrase","usage":"한국어 사용법"}],"followUpQuestion":"English follow-up question","encouragement":"한국어 격려"}
+0-3 corrections. Exactly 3 naturalExpressions.`;
+          const t=await callAI(`Topic: ${topic.title}\nQ: ${lesson.speakingQuestion}\nStudent: ${userResp}`,sys);
+          setFeedback(parseJSON(t)); setScreen("feedback");
+        },"speaking");
       }
 
-      async function submitFollowup() {
-        if (!userFollowup.trim()) return;
-        setLoadingMsg("최종 피드백을 정리하는 중");
-        setScreen("loading");
-        await run(async () => {
-          const sys = `English teacher, final feedback. Return ONLY valid JSON no markdown.
-IMPORTANT: All explanations must be in Korean (한국어).
-{"correctedVersion":"corrected English version","corrections":[{"original":"","correction":"","explanation":"한국어로 설명"}],"finalNote":"오늘 학습에 대한 따뜻한 마무리 코멘트 한국어로 2-3문장","todaysPhrases":["오늘 배운 핵심 영어 표현 1","핵심 표현 2","핵심 표현 3"]}
-0-3 corrections.`;
-          const text = await callAI(`Topic: ${topic.title}\nQ: ${feedback.followUpQuestion}\nAnswer: ${userFollowup}`, sys);
-          const data = parseJSON(text);
-          setFinalFb(data);
-          const newStreak = streak + 1;
-          setStreak(newStreak);
-          saveStreak(newStreak);
+      async function submitFollowup(){
+        if(!followup.trim()) return;
+        setLoadingMsg("마무리 피드백 정리 중"); setScreen("loading");
+        await run(async()=>{
+          const sys=`English teacher. Return ONLY valid JSON no markdown. All in Korean except English phrases.
+{"correctedVersion":"corrected","corrections":[{"original":"","correction":"","explanation":"한국어"}],"finalNote":"한국어 마무리 2문장","todaysPhrases":["영어표현1","영어표현2","영어표현3"]}`;
+          const t=await callAI(`Q: ${feedback.followUpQuestion}\nAnswer: ${followup}`,sys);
+          const d=parseJSON(t); setFinalFb(d);
+          const ns=streak+1; setStreak(ns); saveStreak(ns);
           setScreen("complete");
-        }, "feedback");
+        },"feedback");
       }
 
-      function reset() {
-        setTopic(null); setLesson(null); setUserResp(""); setFeedback(null);
-        setUserFollowup(""); setFinalFb(null); setError(null); stopSpeak(); setScreen("home");
+      function reset(){
+        setTopic(null);setLesson(null);setUserResp("");setFeedback(null);
+        setFollowup("");setFinalFb(null);setError(null);setDone([]);
+        stopSpeak();setScreen("home");
       }
 
-      return (
+      return(
         <div style={S.app}>
-          {/* Header */}
           <div style={S.header}>
             <div style={S.masthead}>ENGLISH DAILY</div>
-            <div style={{ textAlign: "right" }}>
-              {streak > 0 && <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: C.gold }}>🔥 {streak}일 연속</div>}
-              <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, color: C.muted, marginTop: 2 }}>{new Date().toLocaleDateString("ko-KR")}</div>
+            <div style={{textAlign:"right"}}>
+              {streak>0&&<div style={{fontFamily:"'DM Sans',sans-serif",fontSize:13,color:C.gold}}>🔥 {streak}일 연속</div>}
+              <div style={{fontFamily:"'DM Sans',sans-serif",fontSize:11,color:C.muted,marginTop:2}}>{new Date().toLocaleDateString("ko-KR")}</div>
             </div>
           </div>
 
-          {error && (
-            <div style={{ background: "#2a0a0a", borderBottom: `1px solid #5a2020`, padding: "12px 28px", color: C.error, fontFamily: "'DM Sans', sans-serif", fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          {error&&(
+            <div style={{background:"#2a0a0a",borderBottom:`1px solid #5a2020`,padding:"12px 22px",color:C.error,fontFamily:"'DM Sans',sans-serif",fontSize:13,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <span>⚠️ {error}</span>
-              <button onClick={() => setError(null)} style={{ background: "none", border: "none", color: C.error, cursor: "pointer", fontSize: 16 }}>✕</button>
+              <button onClick={()=>setError(null)} style={{background:"none",border:"none",color:C.error,cursor:"pointer",fontSize:16}}>✕</button>
             </div>
           )}
 
           <div style={S.body}>
-            {screen === "loading" && <LoadingScreen msg={loadingMsg} />}
+            {screen==="loading"&&(
+              <div style={{textAlign:"center",padding:"80px 20px"}}>
+                <div style={{fontSize:40,marginBottom:16}}>🎧</div>
+                <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:22,color:C.cream,marginBottom:8}}>{loadingMsg}...</div>
+                <div style={{color:C.muted,fontSize:13,fontFamily:"'DM Sans',sans-serif"}}>잠시만 기다려주세요</div>
+              </div>
+            )}
 
-            {/* HOME */}
-            {screen === "home" && (
-              <div style={{ paddingTop: 48 }}>
-                <div style={{ ...S.label, textAlign: "center" }}>{today}</div>
-                <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 44, fontWeight: 400, lineHeight: 1.15, color: C.cream, textAlign: "center", margin: "0 0 10px" }}>
-                  오늘의 영어,<br /><span style={{ color: C.gold, fontStyle: "italic" }}>함께 시작해요</span>
+            {screen==="home"&&(
+              <div style={{paddingTop:44}}>
+                <div style={{textAlign:"center",marginBottom:28}}>
+                  <div style={{fontSize:52,marginBottom:12}}>🎧</div>
+                  <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:40,fontWeight:400,lineHeight:1.15,color:C.cream,marginBottom:8}}>
+                    들려야<br/><span style={{color:C.gold,fontStyle:"italic"}}>말할 수 있다</span>
+                  </div>
+                  <p style={{color:C.creamMuted,fontSize:14,lineHeight:1.9,marginTop:12}}>
+                    매일 최신 뉴스로<br/>
+                    <strong style={{color:C.cream}}>듣기 → 쉐도잉 → 스피킹</strong> 루틴
+                  </p>
                 </div>
-                <p style={{ textAlign: "center", color: C.creamMuted, fontSize: 15, lineHeight: 1.8, margin: "0 0 40px" }}>
-                  최신 뉴스 주제로 듣고 말하고 교정받는<br />나만의 AI 영어 스피킹 루틴
-                </p>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 36 }}>
-                  {[["🎧","듣고 따라하기"],["🗣️","스피킹 + 교정"],["🇰🇷","한국어 설명"]].map(([e,l]) => (
-                    <div key={l} style={{ ...S.card, textAlign: "center", padding: "20px 12px" }}>
-                      <div style={{ fontSize: 24, marginBottom: 8 }}>{e}</div>
-                      <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 12, color: C.creamMuted }}>{l}</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:28}}>
+                  {[["🎧","집중 듣기"],["🔁","쉐도잉"],["🎤","음성 스피킹"]].map(([e,l])=>(
+                    <div key={l} style={{...S.card,textAlign:"center",padding:"16px 8px"}}>
+                      <div style={{fontSize:22,marginBottom:6}}>{e}</div>
+                      <div style={{fontFamily:"'DM Sans',sans-serif",fontSize:11,color:C.creamMuted}}>{l}</div>
                     </div>
                   ))}
+                </div>
+                <div style={{background:"#0a1a0a",border:`1px solid #1e3a1e`,borderRadius:10,padding:"14px 16px",marginBottom:24}}>
+                  <div style={{color:C.success,fontFamily:"'DM Sans',sans-serif",fontSize:13,lineHeight:1.9}}>
+                    📱 <strong>오늘의 루틴</strong><br/>
+                    1️⃣ 주제 선택 → 2️⃣ 원어민 음성 듣기<br/>
+                    3️⃣ 쉐도잉 (따라 말하기) → 4️⃣ 🎤 스피킹 + AI 교정
+                  </div>
                 </div>
                 <button style={S.btn} onClick={fetchTopics}>오늘의 주제 가져오기 →</button>
               </div>
             )}
 
-            {/* SELECTING */}
-            {screen === "selecting" && (
-              <div style={{ paddingTop: 36 }}>
-                <StepBar step={0} />
+            {screen==="selecting"&&(
+              <div style={{paddingTop:32}}>
+                <StepBar step={0}/>
                 <div style={S.label}>STEP 1 — 주제 선택</div>
-                <div style={S.h2}>오늘 어떤 주제로 말해볼까요?</div>
-                <p style={{ color: C.creamMuted, fontSize: 14, marginBottom: 24, lineHeight: 1.7 }}>하나를 선택하면 스피킹 레슨이 바로 시작됩니다.</p>
-                {topics.map(t => <TopicCard key={t.id} topic={t} onSelect={startLesson} />)}
+                <div style={S.h2}>오늘 뭘 들어볼까요?</div>
+                <p style={{color:C.creamMuted,fontSize:13,marginBottom:18,lineHeight:1.7}}>선택하면 듣기 → 쉐도잉 → 스피킹 순서로 진행됩니다.</p>
+                {topics.map(t=><TopicCard key={t.id} topic={t} onSelect={startLesson}/>)}
                 <button style={S.btn} onClick={fetchTopics}>🔄 다른 주제 가져오기</button>
               </div>
             )}
 
-            {/* OVERVIEW → 빠르게 스피킹으로 */}
-            {screen === "overview" && lesson && (
-              <div style={{ paddingTop: 36 }}>
-                <StepBar step={1} />
-                <div style={S.label}>STEP 2 — 주제 파악 & 스피킹</div>
+            {screen==="listening"&&lesson&&(
+              <div style={{paddingTop:32}}>
+                <StepBar step={1}/>
+                <div style={S.label}>STEP 2 — 집중 듣기</div>
                 <div style={S.h2}>{topic?.title}</div>
-                <p style={{ color: C.creamMuted, fontSize: 13, fontFamily: "'DM Sans', sans-serif", marginBottom: 20 }}>{topic?.emoji} {topic?.category} · {topic?.difficulty}</p>
+                <p style={{color:C.creamMuted,fontSize:13,fontFamily:"'DM Sans',sans-serif",marginBottom:18}}>{topic?.emoji} {topic?.category}</p>
 
-                {/* 짧은 요약 + 듣기 버튼 */}
-                <div style={{ ...S.card, borderLeft: `3px solid ${C.gold}` }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-                    <div style={S.h3}>📋 Brief Summary</div>
-                    <SpeakButton text={lesson.summary} label="🔊 읽어주기" />
+                <div style={{...S.card,borderLeft:`3px solid ${C.gold}`}}>
+                  <div style={S.h3}>📢 오늘의 주제 요약</div>
+                  <p style={{color:C.cream,lineHeight:1.85,fontSize:15,marginBottom:14}}>{lesson.summary}</p>
+                  <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                    <ListenBtn text={lesson.summary} rate={0.85} label="🔊 보통 속도"/>
+                    <ListenBtn text={lesson.summary} rate={0.65} label="🐢 느리게"/>
                   </div>
-                  <p style={{ color: C.cream, lineHeight: 1.85, fontSize: 15, margin: 0 }}>{lesson.summary}</p>
                 </div>
 
-                {/* 어휘 접기/펼치기 */}
                 <div style={S.card}>
-                  <button onClick={() => setVocabOpen(v => !v)} style={{ background: "none", border: "none", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", padding: 0 }}>
-                    <div style={S.h3}>📚 핵심 어휘 3개 {vocabOpen ? "▲" : "▼"}</div>
-                  </button>
-                  {vocabOpen && lesson.vocabulary?.map((v, i) => (
-                    <div key={i} style={{ background: "#0a1220", border: `1px solid ${C.cardBorder}`, borderRadius: 8, padding: "12px 16px", marginTop: 10 }}>
-                      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 4 }}>
-                        <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 600, color: C.goldLight }}>{v.word}</span>
-                        <span style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, color: C.muted }}>{v.pos}</span>
-                        <span style={{ fontSize: 13, color: C.creamMuted }}>— {v.definition}</span>
+                  <div style={S.h3}>⚡ 핵심 표현 3가지</div>
+                  {lesson.expressions?.map((ex,i)=>(
+                    <div key={i} style={{background:"#0a1220",border:`1px solid #1e3a2a`,borderRadius:8,padding:"12px 14px",marginBottom:10}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
+                        <div>
+                          <span style={{fontFamily:"'Cormorant Garamond',serif",fontSize:17,color:C.goldLight}}>"{ex.phrase}"</span>
+                          <span style={{fontFamily:"'DM Sans',sans-serif",fontSize:12,color:C.creamMuted,marginLeft:8}}>— {ex.korean}</span>
+                        </div>
+                        <ListenBtn text={ex.phrase} label="🔊"/>
                       </div>
-                      <div style={{ fontSize: 13, color: C.creamMuted, fontStyle: "italic" }}>"{v.example}"</div>
+                      <div style={{fontSize:12,color:C.muted,fontStyle:"italic"}}>"{ex.example}"</div>
                     </div>
                   ))}
                 </div>
 
-                {/* 스피킹 프롬프트 미리보기 + 바로 시작 */}
-                <div style={{ ...S.card, background: "#0d1520", borderColor: "#2a4a6a" }}>
-                  <div style={S.h3}>🎯 오늘의 스피킹 질문</div>
-                  <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 21, lineHeight: 1.5, color: C.cream, marginBottom: 16 }}>
-                    {lesson.prompts?.[0]?.question}
-                  </div>
-                  <SpeakButton text={lesson.prompts?.[0]?.question} label="🔊 질문 듣기" />
-                </div>
-
-                <button style={S.btn} onClick={() => setScreen("speaking")}>
-                  🗣️ 스피킹 시작하기 →
-                </button>
+                <button style={S.btn} onClick={()=>setScreen("shadowing")}>쉐도잉 시작하기 →</button>
+                <button style={S.btnSec} onClick={()=>setScreen("selecting")}>← 주제 다시 선택</button>
               </div>
             )}
 
-            {/* SPEAKING */}
-            {screen === "speaking" && lesson && (
-              <div style={{ paddingTop: 36 }}>
-                <StepBar step={1} />
-                <div style={S.label}>STEP 2 — 스피킹 연습</div>
-                <div style={S.h2}>소리 내어 말해보세요</div>
+            {screen==="shadowing"&&lesson&&(
+              <div style={{paddingTop:32}}>
+                <StepBar step={2}/>
+                <div style={S.label}>STEP 3 — 쉐도잉</div>
+                <div style={S.h2}>듣고 따라 말해보세요</div>
+                <div style={{background:"#0a150a",border:`1px solid #1e3a1e`,borderRadius:10,padding:"12px 16px",marginBottom:18}}>
+                  <div style={{color:C.success,fontFamily:"'DM Sans',sans-serif",fontSize:13,lineHeight:1.8}}>
+                    💡 🔊 듣기 → 멈추고 똑같이 따라 말하기 → ✅ 체크<br/>
+                    처음엔 느리게, 익숙해지면 보통 속도로!
+                  </div>
+                </div>
 
-                {/* 질문 카드 + 듣기 */}
-                <div style={{ ...S.card, borderLeft: `3px solid ${C.gold}`, background: "#0d1520" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+                {lesson.shadowSentences?.map((s,i)=>(
+                  <div key={i} style={{...S.card,border:`1px solid ${done.includes(i)?C.success:C.cardBorder}`,transition:"border 0.2s"}}>
+                    <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:19,color:C.cream,lineHeight:1.55,marginBottom:6}}>{s.text}</div>
+                    <div style={{fontSize:12,color:C.creamMuted,marginBottom:12}}>🇰🇷 {s.meaning}</div>
+                    <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                      <ListenBtn text={s.text} rate={0.65} label="🐢 느리게"/>
+                      <ListenBtn text={s.text} rate={0.9} label="🔊 보통"/>
+                      <button onClick={()=>setDone(d=>d.includes(i)?d.filter(x=>x!==i):[...d,i])}
+                        style={{background:done.includes(i)?"#1e3a2a":"transparent",border:`1px solid ${done.includes(i)?C.success:C.cardBorder}`,borderRadius:8,padding:"8px 14px",color:done.includes(i)?C.success:C.creamMuted,fontFamily:"'DM Sans',sans-serif",fontSize:12,cursor:"pointer",marginLeft:"auto"}}>
+                        {done.includes(i)?"✅ 완료":"☐ 완료"}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+
+                <div style={{textAlign:"center",marginBottom:14}}>
+                  <span style={{fontFamily:"'DM Sans',sans-serif",fontSize:13,color:done.length>=3?C.gold:C.muted}}>{done.length}/5 완료</span>
+                </div>
+                <button style={S.btn} onClick={()=>setScreen("speaking")}>
+                  {done.length>=3?"🎤 스피킹 시작하기 →":"건너뛰고 스피킹 →"}
+                </button>
+                <button style={S.btnSec} onClick={()=>setScreen("listening")}>← 듣기로</button>
+              </div>
+            )}
+
+            {screen==="speaking"&&lesson&&(
+              <div style={{paddingTop:32}}>
+                <StepBar step={3}/>
+                <div style={S.label}>STEP 4 — 스피킹</div>
+                <div style={S.h2}>이제 말해볼까요?</div>
+
+                <div style={{...S.card,borderLeft:`3px solid ${C.gold}`,background:"#0d1520",marginBottom:14}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
                     <div style={S.h3}>💬 Speaking Question</div>
-                    <SpeakButton text={lesson.prompts?.[0]?.question} label="🔊 듣기" />
+                    <ListenBtn text={lesson.speakingQuestion} label="🔊 듣기"/>
                   </div>
-                  <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 22, lineHeight: 1.55, color: C.cream }}>
-                    {lesson.prompts?.[0]?.question}
-                  </div>
-                </div>
-
-                {/* 안내 */}
-                <div style={{ background: "#0a150a", border: `1px solid #1e3a1e`, borderRadius: 10, padding: "14px 18px", marginBottom: 16 }}>
-                  <div style={{ color: C.success, fontFamily: "'DM Sans', sans-serif", fontSize: 13, lineHeight: 1.7 }}>
-                    💡 <strong>이렇게 해보세요</strong><br />
-                    1. 🔊 듣기로 질문을 들어보세요<br />
-                    2. 소리 내어 영어로 말해보세요 (30초~1분)<br />
-                    3. 말한 내용을 아래에 영어로 입력하세요
-                  </div>
+                  <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:21,lineHeight:1.55,color:C.cream}}>{lesson.speakingQuestion}</div>
                 </div>
 
                 <div style={S.card}>
-                  <div style={S.h3}>✍️ 영어로 입력하기</div>
-                  <textarea style={S.textarea} value={userResp} onChange={e => setUserResp(e.target.value)}
-                    placeholder="Type your spoken response in English here..." />
-                  <div style={{ fontSize: 12, color: C.muted, marginTop: 8, fontFamily: "'DM Sans', sans-serif" }}>
-                    {userResp.trim() ? `${userResp.trim().split(/\s+/).length} words` : "최소 2~3문장을 목표로 해보세요"}
-                  </div>
+                  <div style={S.h3}>{hasMic?"🎤 음성으로 답하기":"✍️ 영어로 입력하기"}</div>
+                  {hasMic?(
+                    <>
+                      <MicButton onTranscript={setUserResp}/>
+                      {userResp&&(
+                        <div style={{marginTop:10}}>
+                          <div style={{...S.h3,marginBottom:6}}>📝 인식된 텍스트 (수정 가능)</div>
+                          <textarea style={S.textarea} value={userResp} onChange={e=>setUserResp(e.target.value)}/>
+                        </div>
+                      )}
+                      {!userResp&&(
+                        <div style={{marginTop:8}}>
+                          <div style={{color:C.muted,fontFamily:"'DM Sans',sans-serif",fontSize:12,marginBottom:8,textAlign:"center"}}>또는 직접 입력</div>
+                          <textarea style={{...S.textarea,minHeight:80}} value={userResp} onChange={e=>setUserResp(e.target.value)} placeholder="영어로 입력..."/>
+                        </div>
+                      )}
+                    </>
+                  ):(
+                    <>
+                      <div style={{background:"#1a1a0a",border:`1px solid #3a3a1e`,borderRadius:8,padding:"10px 14px",marginBottom:12,fontSize:12,color:"#c8a030",fontFamily:"'DM Sans',sans-serif"}}>
+                        ⚠️ Chrome을 사용하면 🎤 마이크 기능을 쓸 수 있어요.
+                      </div>
+                      <textarea style={S.textarea} value={userResp} onChange={e=>setUserResp(e.target.value)} placeholder="Type your response in English..."/>
+                    </>
+                  )}
                 </div>
 
-                <button style={{ ...S.btn, opacity: userResp.trim() ? 1 : 0.4 }} onClick={submitSpeaking} disabled={!userResp.trim()}>
-                  피드백 받기 →
-                </button>
-                <button style={S.btnSec} onClick={() => setScreen("overview")}>← 주제로 돌아가기</button>
+                <button style={{...S.btn,opacity:userResp.trim()?1:0.4}} onClick={submitSpeaking} disabled={!userResp.trim()}>피드백 받기 →</button>
+                <button style={S.btnSec} onClick={()=>setScreen("shadowing")}>← 쉐도잉으로</button>
               </div>
             )}
 
-            {/* FEEDBACK */}
-            {screen === "feedback" && feedback && (
-              <div style={{ paddingTop: 36 }}>
-                <StepBar step={2} />
-                <div style={S.label}>STEP 3 — 피드백</div>
-                <div style={S.h2}>피드백 결과</div>
-                <p style={{ color: C.gold, fontSize: 14, fontFamily: "'DM Sans', sans-serif", marginBottom: 24, fontStyle: "italic" }}>
-                  {feedback.encouragement}
-                </p>
+            {screen==="feedback"&&feedback&&(
+              <div style={{paddingTop:32}}>
+                <StepBar step={4}/>
+                <div style={S.label}>STEP 5 — 피드백</div>
+                <p style={{color:C.gold,fontSize:14,fontFamily:"'DM Sans',sans-serif",marginBottom:18,fontStyle:"italic"}}>{feedback.encouragement}</p>
 
-                {/* 교정된 버전 + 듣기 */}
                 <div style={S.card}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
                     <div style={S.h3}>✅ 교정된 버전</div>
-                    <SpeakButton text={feedback.correctedVersion} label="🔊 들어보기" />
+                    <ListenBtn text={feedback.correctedVersion} label="🔊 듣기"/>
                   </div>
-                  <p style={{ color: C.success, lineHeight: 1.85, fontSize: 15, margin: 0, fontStyle: "italic" }}>{feedback.correctedVersion}</p>
+                  <p style={{color:C.success,lineHeight:1.85,fontSize:15,margin:0,fontStyle:"italic"}}>{feedback.correctedVersion}</p>
                 </div>
 
-                {/* 교정 포인트 - 한국어 설명 */}
-                {feedback.corrections?.length > 0 && (
+                {feedback.corrections?.length>0&&(
                   <div style={S.card}>
                     <div style={S.h3}>📝 교정 포인트</div>
-                    {feedback.corrections.map((c, i) => (
-                      <div key={i} style={{ background: "#0a1220", border: `1px solid ${C.cardBorder}`, borderRadius: 8, padding: "14px 16px", marginBottom: 10 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                          <span style={{ fontSize: 13, color: C.error, textDecoration: "line-through", fontStyle: "italic" }}>{c.original}</span>
-                          <span style={{ color: C.muted }}>→</span>
-                          <span style={{ fontSize: 13, color: C.success, fontWeight: 600 }}>{c.correction}</span>
+                    {feedback.corrections.map((c,i)=>(
+                      <div key={i} style={{background:"#0a1220",border:`1px solid ${C.cardBorder}`,borderRadius:8,padding:"12px 14px",marginBottom:8}}>
+                        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:6}}>
+                          <span style={{fontSize:13,color:C.error,textDecoration:"line-through",fontStyle:"italic"}}>{c.original}</span>
+                          <span style={{color:C.muted}}>→</span>
+                          <span style={{fontSize:13,color:C.success,fontWeight:600}}>{c.correction}</span>
                         </div>
-                        {/* 설명 한국어 */}
-                        <div style={{ fontSize: 13, color: C.creamMuted, fontFamily: "'DM Sans', sans-serif", paddingTop: 6, borderTop: `1px solid ${C.cardBorder}` }}>
-                          🇰🇷 {c.explanation}
-                        </div>
+                        <div style={{fontSize:13,color:C.creamMuted,fontFamily:"'DM Sans',sans-serif",paddingTop:6,borderTop:`1px solid ${C.cardBorder}`}}>🇰🇷 {c.explanation}</div>
                       </div>
                     ))}
                   </div>
                 )}
 
-                {feedback.corrections?.length === 0 && (
-                  <div style={{ ...S.card, borderColor: "#1e3a2a", background: "#0a1a0f" }}>
-                    <div style={{ color: C.success, fontFamily: "'DM Sans', sans-serif", fontSize: 14 }}>🎉 완벽해요! 교정할 부분이 없습니다.</div>
+                {feedback.corrections?.length===0&&(
+                  <div style={{...S.card,borderColor:"#1e3a2a",background:"#0a1a0f"}}>
+                    <div style={{color:C.success,fontFamily:"'DM Sans',sans-serif",fontSize:14}}>🎉 완벽해요! 교정할 부분이 없습니다.</div>
                   </div>
                 )}
 
-                {/* 자연스러운 표현 - 한국어 설명 */}
                 <div style={S.card}>
                   <div style={S.h3}>⚡ 원어민 표현 3가지</div>
-                  {feedback.naturalExpressions?.map((e, i) => (
-                    <div key={i} style={{ background: "#0a1220", border: `1px solid #1e3a2a`, borderRadius: 8, padding: "14px 16px", marginBottom: 10 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-                        <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 18, color: C.goldLight }}>"{e.expression}"</div>
-                        <SpeakButton text={e.expression} label="🔊" />
+                  {feedback.naturalExpressions?.map((e,i)=>(
+                    <div key={i} style={{background:"#0a1220",border:`1px solid #1e3a2a`,borderRadius:8,padding:"12px 14px",marginBottom:8}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
+                        <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:17,color:C.goldLight}}>"{e.expression}"</div>
+                        <ListenBtn text={e.expression} label="🔊"/>
                       </div>
-                      {/* 사용법 한국어 */}
-                      <div style={{ fontSize: 13, color: C.creamMuted, fontFamily: "'DM Sans', sans-serif" }}>
-                        🇰🇷 {e.usage}
-                      </div>
+                      <div style={{fontSize:13,color:C.creamMuted,fontFamily:"'DM Sans',sans-serif"}}>🇰🇷 {e.usage}</div>
                     </div>
                   ))}
                 </div>
 
-                {/* 추가 질문 */}
-                <div style={{ ...S.card, borderLeft: `3px solid ${C.gold}` }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+                <div style={{...S.card,borderLeft:`3px solid ${C.gold}`}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
                     <div style={S.h3}>💬 추가 질문</div>
-                    <SpeakButton text={feedback.followUpQuestion} label="🔊 듣기" />
+                    <ListenBtn text={feedback.followUpQuestion} label="🔊"/>
                   </div>
-                  <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 20, color: C.cream, marginBottom: 16 }}>
-                    {feedback.followUpQuestion}
-                  </div>
-                  <div style={{ background: "#0a150a", border: `1px solid #1e3a1e`, borderRadius: 8, padding: "10px 14px", marginBottom: 14, fontSize: 13, color: C.success, fontFamily: "'DM Sans', sans-serif" }}>
-                    💡 먼저 소리 내어 말해보고, 아래에 입력하세요
-                  </div>
-                  <textarea style={S.textarea} value={userFollowup} onChange={e => setUserFollowup(e.target.value)}
-                    placeholder="Answer in English..." />
+                  <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:19,color:C.cream,marginBottom:14}}>{feedback.followUpQuestion}</div>
+                  {hasMic?(
+                    <>
+                      <MicButton onTranscript={setFollowup}/>
+                      {followup&&<textarea style={{...S.textarea,marginTop:10}} value={followup} onChange={e=>setFollowup(e.target.value)}/>}
+                      {!followup&&<textarea style={{...S.textarea,marginTop:10,minHeight:80}} value={followup} onChange={e=>setFollowup(e.target.value)} placeholder="또는 영어로 입력..."/>}
+                    </>
+                  ):(
+                    <textarea style={S.textarea} value={followup} onChange={e=>setFollowup(e.target.value)} placeholder="Answer in English..."/>
+                  )}
                 </div>
 
-                <button style={{ ...S.btn, opacity: userFollowup.trim() ? 1 : 0.4 }} onClick={submitFollowup} disabled={!userFollowup.trim()}>
-                  레슨 완료하기 →
-                </button>
+                <button style={{...S.btn,opacity:followup.trim()?1:0.4}} onClick={submitFollowup} disabled={!followup.trim()}>레슨 완료하기 →</button>
               </div>
             )}
 
-            {/* COMPLETE */}
-            {screen === "complete" && finalFb && (
-              <div style={{ paddingTop: 48 }}>
-                <div style={{ textAlign: "center", marginBottom: 32 }}>
-                  <div style={{ fontSize: 48, marginBottom: 12 }}>🎉</div>
-                  <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 36, color: C.gold, marginBottom: 12 }}>오늘의 학습 완료!</div>
-                  <div style={{ display: "inline-block", background: C.gold + "22", border: `1px solid ${C.gold}`, borderRadius: 20, padding: "6px 20px", fontFamily: "'DM Sans', sans-serif", fontSize: 14, color: C.gold }}>
-                    🔥 {streak}일 연속 학습 중
-                  </div>
+            {screen==="complete"&&finalFb&&(
+              <div style={{paddingTop:44}}>
+                <div style={{textAlign:"center",marginBottom:28}}>
+                  <div style={{fontSize:48,marginBottom:10}}>🎉</div>
+                  <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:34,color:C.gold,marginBottom:10}}>오늘의 학습 완료!</div>
+                  <div style={{display:"inline-block",background:C.gold+"22",border:`1px solid ${C.gold}`,borderRadius:20,padding:"5px 18px",fontFamily:"'DM Sans',sans-serif",fontSize:14,color:C.gold}}>🔥 {streak}일 연속 학습 중</div>
                 </div>
 
-                {finalFb.corrections?.length > 0 && (
+                {finalFb.corrections?.length>0&&(
                   <div style={S.card}>
                     <div style={S.h3}>📝 마지막 교정</div>
-                    {finalFb.corrections.map((c, i) => (
-                      <div key={i} style={{ background: "#0a1220", border: `1px solid ${C.cardBorder}`, borderRadius: 8, padding: "14px 16px", marginBottom: 10 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                          <span style={{ fontSize: 13, color: C.error, textDecoration: "line-through", fontStyle: "italic" }}>{c.original}</span>
-                          <span style={{ color: C.muted }}>→</span>
-                          <span style={{ fontSize: 13, color: C.success }}>{c.correction}</span>
+                    {finalFb.corrections.map((c,i)=>(
+                      <div key={i} style={{background:"#0a1220",border:`1px solid ${C.cardBorder}`,borderRadius:8,padding:"12px 14px",marginBottom:8}}>
+                        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:4}}>
+                          <span style={{fontSize:13,color:C.error,textDecoration:"line-through",fontStyle:"italic"}}>{c.original}</span>
+                          <span style={{color:C.muted}}>→</span>
+                          <span style={{fontSize:13,color:C.success}}>{c.correction}</span>
                         </div>
-                        <div style={{ fontSize: 13, color: C.creamMuted, fontFamily: "'DM Sans', sans-serif", paddingTop: 6, borderTop: `1px solid ${C.cardBorder}` }}>
-                          🇰🇷 {c.explanation}
-                        </div>
+                        <div style={{fontSize:12,color:C.creamMuted,fontFamily:"'DM Sans',sans-serif",paddingTop:4,borderTop:`1px solid ${C.cardBorder}`}}>🇰🇷 {c.explanation}</div>
                       </div>
                     ))}
                   </div>
@@ -567,23 +531,23 @@ IMPORTANT: All explanations must be in Korean (한국어).
 
                 <div style={S.card}>
                   <div style={S.h3}>💡 오늘 배운 핵심 표현</div>
-                  {finalFb.todaysPhrases?.map((p, i) => (
-                    <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: "#0a1220", borderRadius: 8, marginBottom: 8 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                        <span style={{ color: C.gold, fontFamily: "'DM Sans', sans-serif", fontWeight: 600 }}>{String(i + 1).padStart(2, "0")}</span>
-                        <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 17, color: C.cream }}>{p}</span>
+                  {finalFb.todaysPhrases?.map((p,i)=>(
+                    <div key={i} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 12px",background:"#0a1220",borderRadius:8,marginBottom:8}}>
+                      <div style={{display:"flex",alignItems:"center",gap:10}}>
+                        <span style={{color:C.gold,fontFamily:"'DM Sans',sans-serif",fontWeight:600}}>{String(i+1).padStart(2,"0")}</span>
+                        <span style={{fontFamily:"'Cormorant Garamond',serif",fontSize:16,color:C.cream}}>{p}</span>
                       </div>
-                      <SpeakButton text={p} label="🔊" />
+                      <ListenBtn text={p} label="🔊"/>
                     </div>
                   ))}
                 </div>
 
-                <div style={{ ...S.card, borderColor: "#1e3a2a", background: "#091510" }}>
-                  <div style={{ color: C.creamMuted, lineHeight: 1.8, fontSize: 15 }}>{finalFb.finalNote}</div>
+                <div style={{...S.card,borderColor:"#1e3a2a",background:"#091510"}}>
+                  <div style={{color:C.creamMuted,lineHeight:1.8,fontSize:15}}>{finalFb.finalNote}</div>
                 </div>
 
                 <button style={S.btn} onClick={reset}>홈으로 돌아가기</button>
-                <button style={S.btnSec} onClick={() => { reset(); setTimeout(fetchTopics, 100); }}>다른 주제로 한 번 더 →</button>
+                <button style={S.btnSec} onClick={()=>{reset();setTimeout(fetchTopics,100);}}>다른 주제로 한 번 더 →</button>
               </div>
             )}
           </div>
@@ -591,7 +555,7 @@ IMPORTANT: All explanations must be in Korean (한국어).
       );
     }
 
-    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+    ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
   </script>
 </body>
 </html>
