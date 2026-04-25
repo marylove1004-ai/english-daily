@@ -646,6 +646,17 @@ Exactly 5 shadowSentences (short, conversational, fun). Exactly 3 expressions (i
                 </div>
 
                 <button style={{...S.btn,opacity:followup.trim()?1:0.4}} onClick={submitFollowup} disabled={!followup.trim()}>레슨 완료하기 →</button>
+<button style={S.btnSec} onClick={async()=>{
+  setLoadingMsg("마무리 피드백 정리 중");setScreen("loading");
+  try{
+    const sys=`You are a friendly ${activeLang} teacher. Return ONLY valid JSON no markdown.
+{"correctedVersion":"","corrections":[],"finalNote":"한국어 마무리 2문장","todaysPhrases":["핵심표현1","핵심표현2","핵심표현3"]}`;
+    const t=await callAI(`Summarize today's lesson on: ${topic?.title}. Give encouraging finalNote in Korean and 3 key ${activeLang} phrases learned today.`,sys);
+    const d=parseJSON(t);setFinalFb(d);
+    const ns=streak+1;setStreak(ns);saveStreak(ns,activeLang);
+    setScreen("complete");
+  }catch(e){setError(e.message);setScreen("feedback");}
+}}>추가 질문 건너뛰기 →</button>
               </div>
             )}
 
