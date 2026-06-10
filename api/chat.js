@@ -1,8 +1,7 @@
-// api/chat.js — Vercel Edge Function (Gemini 2.5 Flash)
-
 export const config = { runtime: 'edge' };
 
-const GEMINI_MODEL = 'gemini-2.5-flash';
+// 더 깊이 있고 풍부한 논리를 구사하는 Pro 모델 사용
+const GEMINI_MODEL = 'gemini-2.5-pro';
 const GEMINI_URL   = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
 export default async function handler(req) {
@@ -29,8 +28,8 @@ export default async function handler(req) {
     });
   }
 
-  const anthropicBody = await req.json();
-  const { system, messages, tools } = anthropicBody;
+  const reqBody = await req.json();
+  const { system, messages, tools } = reqBody;
 
   const geminiBody = {
     contents: messages.map(m => ({
@@ -38,11 +37,7 @@ export default async function handler(req) {
       parts: [{ text: m.content }],
     })),
     generationConfig: {
-      maxOutputTokens: 4000,
-      temperature: 0.7,
-      thinkingConfig: {
-        thinkingBudget: 0,  // thinking 비활성화 (JSON 응답 안정성)
-      },
+      temperature: 0.6, // 시사/뉴스에 맞게 톤의 안정성을 높임 (0.6)
     },
   };
 
@@ -50,6 +45,7 @@ export default async function handler(req) {
     geminiBody.systemInstruction = { parts: [{ text: system }] };
   }
 
+  // 웹 검색 도구 활성화
   const wantsSearch = tools?.some(t => t.name === 'web_search' || t.type?.includes('web_search'));
   if (wantsSearch) {
     geminiBody.tools = [{ googleSearch: {} }];
