@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // ─────────────────────────────────────────────────────────────
-//  English Daily — 로컬 서버
-//  실행: ANTHROPIC_API_KEY=sk-ant-... node server.js
+//  Language Daily — 로컬 서버 (Gemini 전용)
+//  실행: GEMINI_API_KEY=AIzaSy... node server.js
 //  그 다음 브라우저에서 http://localhost:3000 열기
 // ─────────────────────────────────────────────────────────────
 'use strict';
@@ -12,46 +12,89 @@ const fs    = require('fs');
 const path  = require('path');
 
 const PORT    = process.env.PORT || 3000;
-const API_KEY = process.env.ANTHROPIC_API_KEY || '';
+const API_KEY = process.env.GEMINI_API_KEY || '';
 const HTML    = path.join(__dirname, 'public', 'index.html');
+const GEMINI_MODEL = 'gemini-2.5-pro';
 
-// ── Anthropic 프록시 ──────────────────────────────────────────
-function proxyToAnthropic(reqBody, res) {
+// ── Gemini API 프록시 ──────────────────────────────────────────
+function proxyToGemini(reqBody, res) {
   if (!API_KEY) {
     res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'ANTHROPIC_API_KEY 환경변수가 설정되지 않았습니다.' }));
+    res.end(JSON.stringify({ error: 'GEMINI_API_KEY 환경변수가 설정되지 않았습니다.' }));
     return;
   }
 
-  const buf = Buffer.from(reqBody, 'utf8');
+  let parsedBody;
+  try {
+    parsedBody = JSON.parse(reqBody);
+  } catch (e) {
+    res.writeHead(400);
+    res.end(JSON.stringify({ error: 'Invalid JSON format in request' }));
+    return;
+  }
+
+  const { system, messages, tools } = parsedBody;
+  
+  const geminiBody = {
+    contents: messages.map(m => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content }],
+    })),
+    generationConfig: { temperature: 0.6 },
+  };
+
+  if (system) {
+    geminiBody.systemInstruction = { parts: [{ text: system }] };
+  }
+
+  const wantsSearch = tools?.some(t => t.name === 'web_search' || t.type?.includes('web_search'));
+  if (wantsSearch) {
+    geminiBody.tools = [{ googleSearch: {} }];
+  }
+
+  const payload = Buffer.from(JSON.stringify(geminiBody), 'utf8');
+
   const options = {
-    hostname: 'api.anthropic.com',
+    hostname: 'generativelanguage.googleapis.com',
     port: 443,
-    path: '/v1/messages',
+    path: `/v1beta/models/${GEMINI_MODEL}:generateContent?key=${API_KEY}`,
     method: 'POST',
     headers: {
-      'Content-Type':       'application/json',
-      'Content-Length':     buf.length,
-      'x-api-key':          API_KEY,
-      'anthropic-version':  '2023-06-01',
-      'anthropic-beta':     'web-search-2025-03-05',
+      'Content-Type': 'application/json',
+      'Content-Length': payload.length,
     },
   };
 
   const proxyReq = https.request(options, (proxyRes) => {
-    res.writeHead(proxyRes.statusCode, {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
+    let rawData = '';
+    proxyRes.on('data', chunk => { rawData += chunk; });
+    proxyRes.on('end', () => {
+      res.writeHead(proxyRes.statusCode, {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+      });
+      
+      if (proxyRes.statusCode !== 200) {
+        res.end(JSON.stringify({ error: `Gemini API Error`, details: rawData }));
+        return;
+      }
+
+      try {
+        const data = JSON.parse(rawData);
+        const text = data.candidates?.[0]?.content?.parts?.find(p => p.text)?.text || '';
+        res.end(JSON.stringify({ content: [{ type: 'text', text }] }));
+      } catch (e) {
+        res.end(JSON.stringify({ error: 'Failed to parse Gemini response' }));
+      }
     });
-    proxyRes.pipe(res);
   });
 
   proxyReq.on('error', (e) => {
     res.writeHead(502, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Anthropic API 연결 실패: ' + e.message }));
+    res.end(JSON.stringify({ error: 'Gemini API 연결 실패: ' + e.message }));
   });
 
-  proxyReq.write(buf);
+  proxyReq.write(payload);
   proxyReq.end();
 }
 
@@ -84,11 +127,11 @@ function handler(req, res) {
     return;
   }
 
-  // Anthropic API 프록시
+  // Gemini API 프록시 라우트 연결
   if (req.method === 'POST' && url === '/api/chat') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
-    req.on('end', () => proxyToAnthropic(body, res));
+    req.on('end', () => proxyToGemini(body, res));
     return;
   }
 
@@ -100,23 +143,23 @@ function handler(req, res) {
 const server = http.createServer(handler);
 server.listen(PORT, '127.0.0.1', () => {
   console.log('\n╔═══════════════════════════════════════╗');
-  console.log('║       📖  English Daily 서버           ║');
+  console.log('║       📰  Language Daily 서버         ║');
   console.log('╠═══════════════════════════════════════╣');
   if (!API_KEY) {
     console.log('║  ⚠️  API 키가 설정되지 않았습니다!      ║');
     console.log('║                                       ║');
     console.log('║  아래 방법으로 실행하세요:              ║');
     console.log('║  Mac/Linux:                           ║');
-    console.log('║  ANTHROPIC_API_KEY=sk-ant-... \\       ║');
+    console.log('║  GEMINI_API_KEY=AIzaSy... \\           ║');
     console.log('║    node server.js                     ║');
     console.log('║                                       ║');
     console.log('║  Windows (PowerShell):                ║');
-    console.log('║  $env:ANTHROPIC_API_KEY="sk-ant-..."  ║');
+    console.log('║  $env:GEMINI_API_KEY="AIzaSy..."      ║');
     console.log('║  node server.js                       ║');
   } else {
-    console.log('║  ✅ API 키 확인됨                      ║');
+    console.log('║  ✅ Gemini API 키 확인됨              ║');
   }
   console.log('╠═══════════════════════════════════════╣');
-  console.log('║  👉  http://localhost:' + PORT + '           ║');
+  console.log('║  👉  http://localhost:' + PORT + '          ║');
   console.log('╚═══════════════════════════════════════╝\n');
 });
