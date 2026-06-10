@@ -26,30 +26,38 @@
   <script type="text/babel">
     const { useState, useEffect, useRef } = React;
 
-    // ── Fix 4: LANG_CONFIG에 카테고리, 카테고리 색상 포함 ────────────
+    // ── 설정: 뉴스, 시사, 비즈니스 중심 카테고리 개편 ────────────
     const LANG_CONFIG = {
       English: {
         code: "en-US", name: "영어", title: "ENGLISH DAILY", emoji: "🇬🇧", voiceStart: "en",
-        // 재미있는 카테고리 믹스
-        categories: ["Celebrity & Gossip", "Movies & TV", "Funny & Weird", "Music & Pop", "Tech & Life", "Sports Drama", "Travel & Food", "World News"],
-        topicPrompt: "Find 5 diverse and FUN topics in English today. Mix celebrity gossip, movie news, funny/weird stories, pop culture, lifestyle — NOT just serious world news. Make it feel like reading a fun magazine, not a newspaper.",
+        categories: ["Global News", "Tech & Business", "Culture & Society", "Science & Health", "Entertainment", "Lifestyle"],
+        topicPrompt: "Find 5 diverse, highly relevant topics in English today. Mix important global news, latest tech/business trends, societal issues, and cultural events. Make it informative, engaging, and thought-provoking. Avoid trivial gossip and focus on topics adults would discuss at a networking event or read in a reputable newspaper.",
       },
       French: {
         code: "fr-FR", name: "프랑스어", title: "FRENCH DAILY", emoji: "🇫🇷", voiceStart: "fr",
-        categories: ["Célébrités", "Cinéma & Séries", "Insolite", "Musique & Pop", "Tech & Vie", "Sport", "Voyage & Cuisine", "Actualités"],
-        topicPrompt: "Find 5 diverse and FUN topics in French today. Mix celebrity news, French cinema, funny/bizarre stories, pop culture, lifestyle — make it engaging and fun, not dry news.",
+        categories: ["Actualités Mondiales", "Tech & Business", "Culture & Société", "Science & Santé", "Divertissement", "Mode de Vie"],
+        topicPrompt: "Find 5 diverse, highly relevant topics in French today. Mix important global news, French society issues, tech trends, and culture. Make it informative and engaging. Avoid trivial gossip and focus on meaningful discussions.",
       },
     };
 
-    // ── API ──────────────────────────────────────────────────────────
+    // ── API 통신 ──────────────────────────────────────────────────────────
     async function callAI(userMsg, system, useSearch=false) {
-      const body = {model:"claude-sonnet-4-20250514",max_tokens:1500,system,messages:[{role:"user",content:userMsg}]};
-      if(useSearch) body.tools=[{type:"web_search_20250305",name:"web_search"}];
-      const res = await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-      if(!res.ok){const e=await res.json().catch(()=>({}));throw new Error(e.error||"API 오류");}
-      const data=await res.json();
+      const body = { system, messages: [{ role: "user", content: userMsg }] };
+      if(useSearch) body.tools = [{ type: "web_search", name: "web_search" }];
+      
+      const res = await fetch("/api/chat", { 
+        method: "POST", 
+        headers: { "Content-Type": "application/json" }, 
+        body: JSON.stringify(body) 
+      });
+      
+      if(!res.ok){
+        const e = await res.json().catch(()=>({}));
+        throw new Error(e.error || "API 오류");
+      }
+      const data = await res.json();
       if(data.error) throw new Error(data.error);
-      return data.content.filter(b=>b.type==="text").map(b=>b.text).join("");
+      return data.content[0].text;
     }
 
     function parseJSON(text) {
@@ -60,7 +68,7 @@
       catch{c=c.replace(/[\r\n]+/g," ").replace(/,\s*([}\]])/g,'$1');return JSON.parse(c);}
     }
 
-    // ── Fix 2: TTS — 언어별 음성 매칭 + 3단계 폴백 ───────────────────
+    // ── TTS ───────────────────────────────────────────────────────────
     function speak(text, rate=0.85, onEnd, langCode="en-US", voiceStart="en") {
       window.speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(text);
@@ -68,10 +76,10 @@
       u.rate = rate;
       const v = window.speechSynthesis.getVoices();
       const voice =
-        v.find(x => x.lang === langCode && x.name.includes("Google")) || // 정확 매칭 + Google
-        v.find(x => x.lang === langCode) ||                               // 정확 매칭
-        v.find(x => x.lang.startsWith(voiceStart)) ||                     // 언어 코드 시작
-        v.find(x => x.lang.includes(voiceStart));                         // 포함 폴백
+        v.find(x => x.lang === langCode && x.name.includes("Google")) ||
+        v.find(x => x.lang === langCode) || 
+        v.find(x => x.lang.startsWith(voiceStart)) ||
+        v.find(x => x.lang.includes(voiceStart));
       if(voice) u.voice = voice;
       if(onEnd) u.onend = onEnd;
       window.speechSynthesis.speak(u);
@@ -82,7 +90,7 @@
     const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
     const hasMic=!!SR;
 
-    // ── Streak (언어별 분리) ──────────────────────────────────────────
+    // ── Streak ──────────────────────────────────────────
     function loadStreak(langKey){
       try{
         const d=JSON.parse(localStorage.getItem(`daily_streak_${langKey}`)||"{}");
@@ -107,7 +115,7 @@
       }
       if(lesson?.shadowSentences?.length){
         t+=`🔁 쉐도잉 문장\n`;
-        lesson.shadowSentences.forEach((s,i)=>{t+=`${i+1}. ${s.text}\n   🇰🇷 ${s.meaning}\n`;});
+        lesson.shadowSentences.forEach((s,i)=>{t+=`${i+1}. ${s.text}\n  🇰🇷 ${s.meaning}\n`;});
         t+=`\n`;
       }
       if(selectedQ) t+=`💬 스피킹 질문 (${selectedQ.level})\n${selectedQ.question}\n\n`;
@@ -141,15 +149,17 @@
     const C={bg:"#080d16",card:"#0f1623",cardBorder:"#1e2d45",cream:"#f0e8d5",creamMuted:"#a89880",gold:"#c8962a",goldLight:"#e8b84b",success:"#34d399",error:"#f87171",muted:"#4a5568",blue:"#3b8eff"};
     const LEVEL_COLOR={Beginner:"#34d399",Intermediate:C.gold,Advanced:"#f87171"};
     const LEVEL_EMOJI={Beginner:"🟢",Intermediate:"🟡",Advanced:"🔴"};
-    // Fix 4: 카테고리 색상 — 더 많은 카테고리 커버
+    
+    // 개편된 카테고리에 맞춘 색상표
     const CAT_COLOR={
-      "Celebrity & Gossip":"#ec4899","Movies & TV":"#8b5cf6","Funny & Weird":"#f59e0b",
-      "Music & Pop":"#06b6d4","Tech & Life":"#3b82f6","Sports Drama":"#10b981",
-      "Travel & Food":"#f97316","World News":"#6366f1",
-      "Célébrités":"#ec4899","Cinéma & Séries":"#8b5cf6","Insolite":"#f59e0b",
-      "Musique & Pop":"#06b6d4","Tech & Vie":"#3b82f6","Sport":"#10b981",
-      "Voyage & Cuisine":"#f97316","Actualités":"#6366f1",
+      "Global News":"#6366f1", "Actualités Mondiales":"#6366f1",
+      "Tech & Business":"#3b82f6", 
+      "Culture & Society":"#8b5cf6", "Culture & Société":"#8b5cf6",
+      "Science & Health":"#10b981", "Science & Santé":"#10b981",
+      "Entertainment":"#ec4899", "Divertissement":"#ec4899",
+      "Lifestyle":"#f59e0b", "Mode de Vie":"#f59e0b",
     };
+    
     const S={
       app:{minHeight:"100vh",background:C.bg,color:C.cream,fontFamily:"'Lora',Georgia,serif",paddingBottom:60},
       header:{borderBottom:`1px solid ${C.cardBorder}`,padding:"16px 22px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",position:"sticky",top:0,background:C.bg,zIndex:100},
@@ -222,7 +232,6 @@
             {selected&&<span style={{marginLeft:"auto",fontFamily:"'DM Sans',sans-serif",fontSize:11,color:lc}}>✓ 선택됨</span>}
           </div>
           <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:19,color:C.cream,lineHeight:1.55,marginBottom:q.hint?10:0}}>{q.question}</div>
-          {/* Fix 3: 힌트는 한국어로 명확하게 */}
           {q.hint&&<div style={{fontSize:12,color:C.creamMuted,fontFamily:"'DM Sans',sans-serif",padding:"8px 12px",background:"#0a1220",borderRadius:6}}>💡 {q.hint}</div>}
           <div style={{marginTop:10}}><ListenBtn text={q.question} label="🔊 듣기" langCode={langCode} voiceStart={voiceStart}/></div>
         </div>
@@ -288,10 +297,8 @@
 
       useEffect(()=>{setStreak(loadStreak(activeLang));},[activeLang]);
 
-      // Fix 1: 언어 전환 시 상태 초기화
       function switchLang(k){
         if(k===activeLang) return;
-        // 레슨 진행 중이면 확인
         if(screen!=="home"&&screen!=="selecting"){
           if(!window.confirm("언어를 바꾸면 현재 레슨이 초기화됩니다. 계속할까요?")) return;
         }
@@ -309,29 +316,30 @@
         catch(e){setError(e.message||"오류 발생");if(fb)setScreen(fb);}
       }
 
+      // 주제 검색 시 프롬프트 개편 (시사, 교양 위주)
       async function fetchTopics(){
-        setLoadingMsg("오늘의 콘텐츠 검색 중");setScreen("loading");
+        setLoadingMsg("오늘의 뉴스/시사 콘텐츠 검색 중");setScreen("loading");
         await run(async()=>{
-          // Fix 4: 언어별 카테고리 + 재미있는 주제 프롬프트
           const catList=L.categories.join(", ");
-          const sys=`You are a fun ${activeLang} learning assistant. ${L.topicPrompt}
+          const sys=`You are a professional ${activeLang} learning assistant. ${L.topicPrompt}
 Return ONLY valid JSON no markdown:
-{"topics":[{"id":1,"category":"Celebrity & Gossip","emoji":"🌟","title":"Short fun title in ${activeLang}","teaser":"One engaging ${activeLang} sentence that makes people want to read more","difficulty":"Intermediate"}]}
+{"topics":[{"id":1,"category":"Global News","emoji":"🌍","title":"Engaging title in ${activeLang}","teaser":"One engaging ${activeLang} sentence summarizing the core issue","difficulty":"Intermediate"}]}
 Pick categories from this list: ${catList}
-Make topics feel like BuzzFeed or a fun magazine — celebrity drama, movie plot twists, bizarre viral stories, food trends, travel tips, funny sports moments. Avoid dry political or economic topics.`;
+Focus on real-world news, current events, economy, and meaningful cultural trends. Do NOT output overly casual or bizarre internet gossip.`;
           const t=await callAI(L.topicPrompt,sys,true);
           setTopics(parseJSON(t).topics);setScreen("selecting");
         },"home");
       }
 
+      // 레슨 생성 시 프롬프트 개편 (CEFR B1-B2 수준 문장, 뉴스 앵커 톤)
       async function startLesson(t){
         setTopic(t);setDone([]);setSelectedQ(null);
         setLoadingMsg("리스닝 콘텐츠 준비 중");setScreen("loading");
         await run(async()=>{
-          const sys=`You are a fun ${activeLang} teacher. Return ONLY valid JSON no markdown:
-{"summary":"2 engaging ${activeLang} sentences about the topic — write like a fun journalist, not a textbook","shadowSentences":[{"text":"natural conversational ${activeLang} sentence from the topic","meaning":"한국어 뜻"},{"text":"...","meaning":"..."},{"text":"...","meaning":"..."},{"text":"...","meaning":"..."},{"text":"...","meaning":"..."}],"expressions":[{"phrase":"natural ${activeLang} phrase or slang related to topic","korean":"한국어 의미","example":"casual example sentence"},{"phrase":"...","korean":"...","example":"..."},{"phrase":"...","korean":"...","example":"..."}],"speakingQuestions":[{"level":"Beginner","question":"Simple personal question about this topic in ${activeLang}","hint":"이렇게 시작해보세요: (한국어로 구체적인 문장 시작 예시 제공)"},{"level":"Intermediate","question":"More specific question that needs some opinion or experience","hint":""},{"level":"Advanced","question":"Deep analytical question requiring detailed personal stance and reasoning","hint":""}]}
-Exactly 5 shadowSentences (short, conversational, fun). Exactly 3 expressions (include slang or idioms if natural). Exactly 3 speakingQuestions. Beginner hint must be written in Korean with a specific example starter.`;
-          const t2=await callAI(`Fun ${activeLang} lesson for: ${t.title}\nContext: ${t.teaser}`,sys,true);
+          const sys=`You are a professional ${activeLang} teacher. Return ONLY valid JSON no markdown:
+{"summary":"2 clear, informative ${activeLang} sentences summarizing the news/topic like a neat news anchor","shadowSentences":[{"text":"natural ${activeLang} sentence from the topic (CEFR B1-B2 level)","meaning":"한국어 뜻"}],"expressions":[{"phrase":"useful ${activeLang} idiom or professional phrase","korean":"한국어 의미","example":"practical example sentence"}],"speakingQuestions":[{"level":"Beginner","question":"Simple yes/no or factual question about this topic in ${activeLang}","hint":"이렇게 시작해보세요: (한국어로 구체적인 문장 시작 예시)"},{"level":"Intermediate","question":"Question asking for their personal opinion or experience related to the news","hint":""},{"level":"Advanced","question":"Deep analytical question requiring them to discuss pros/cons or societal impact","hint":""}]}
+Exactly 5 shadowSentences (informative, professional but conversational). Exactly 3 expressions. Exactly 3 speakingQuestions scaling clearly in difficulty. Beginner hint must be written in Korean.`;
+          const t2=await callAI(`Lesson for: ${t.title}\nContext: ${t.teaser}`,sys,true);
           setLesson(parseJSON(t2));setScreen("listening");
         },"selecting");
       }
@@ -340,8 +348,8 @@ Exactly 5 shadowSentences (short, conversational, fun). Exactly 3 expressions (i
         if(!userResp.trim()||!selectedQ) return;
         setLoadingMsg("답변 분석 중");setScreen("loading");
         await run(async()=>{
-          const sys=`You are a friendly ${activeLang} teacher. Return ONLY valid JSON no markdown. All explanations in Korean.
-{"correctedVersion":"naturally corrected ${activeLang} — sound like a native speaker","corrections":[{"original":"exact phrase","correction":"better phrase","explanation":"왜 틀렸는지 또는 왜 이게 더 자연스러운지 한국어로 설명"}],"naturalExpressions":[{"expression":"native ${activeLang} phrase","usage":"언제 어떻게 쓰는지 한국어로 설명"}],"followUpQuestion":"fun follow-up question in ${activeLang}","encouragement":"한국어로 짧고 따뜻한 격려 한마디"}
+          const sys=`You are a professional ${activeLang} teacher. Return ONLY valid JSON no markdown. All explanations in Korean.
+{"correctedVersion":"naturally corrected ${activeLang} — sound clear and professional","corrections":[{"original":"exact phrase","correction":"better phrase","explanation":"왜 틀렸는지 또는 왜 이게 더 적절한지 한국어로 설명"}],"naturalExpressions":[{"expression":"professional ${activeLang} phrase","usage":"언제 어떻게 쓰는지 한국어로 설명"}],"followUpQuestion":"insightful follow-up question in ${activeLang}","encouragement":"한국어로 짧고 따뜻한 격려 한마디"}
 0-3 corrections for real errors only. Exactly 3 naturalExpressions.`;
           const t=await callAI(`Topic: ${topic.title}\nLevel: ${selectedQ.level}\nQ: ${selectedQ.question}\nStudent: ${userResp}`,sys);
           setFeedback(parseJSON(t));setScreen("feedback");
@@ -352,8 +360,8 @@ Exactly 5 shadowSentences (short, conversational, fun). Exactly 3 expressions (i
         if(!followup.trim()) return;
         setLoadingMsg("마무리 피드백 정리 중");setScreen("loading");
         await run(async()=>{
-          const sys=`You are a friendly ${activeLang} teacher. Return ONLY valid JSON no markdown.
-{"correctedVersion":"corrected ${activeLang}","corrections":[{"original":"","correction":"","explanation":"한국어 설명"}],"finalNote":"오늘 학습에 대한 따뜻한 마무리 코멘트 한국어 2문장","todaysPhrases":["오늘 배운 핵심 ${activeLang} 표현 1","표현 2","표현 3"]}
+          const sys=`You are a professional ${activeLang} teacher. Return ONLY valid JSON no markdown.
+{"correctedVersion":"corrected ${activeLang}","corrections":[{"original":"","correction":"","explanation":"한국어 설명"}],"finalNote":"오늘 학습에 대한 격려 코멘트 한국어 2문장","todaysPhrases":["오늘 배운 핵심 ${activeLang} 표현 1","표현 2","표현 3"]}
 0-3 corrections. todaysPhrases must be ${activeLang} phrases (not Korean).`;
           const t=await callAI(`Q: ${feedback.followUpQuestion}\nAnswer: ${followup}`,sys);
           const d=parseJSON(t);setFinalFb(d);
@@ -396,7 +404,7 @@ Exactly 5 shadowSentences (short, conversational, fun). Exactly 3 expressions (i
             {/* LOADING */}
             {screen==="loading"&&(
               <div style={{textAlign:"center",padding:"80px 20px"}}>
-                <div style={{fontSize:40,marginBottom:16}}>🎧</div>
+                <div style={{fontSize:40,marginBottom:16}}>📰</div>
                 <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:22,color:C.cream,marginBottom:8}}>{loadingMsg}...</div>
                 <div style={{color:C.muted,fontSize:13,fontFamily:"'DM Sans',sans-serif"}}>잠시만 기다려주세요</div>
               </div>
@@ -405,7 +413,6 @@ Exactly 5 shadowSentences (short, conversational, fun). Exactly 3 expressions (i
             {/* HOME */}
             {screen==="home"&&(
               <div style={{paddingTop:36}}>
-                {/* Fix 5: 언어 선택 토글 — 홈에서만 표시 */}
                 <div style={{display:"flex",justifyContent:"center",gap:10,marginBottom:28}}>
                   {Object.keys(LANG_CONFIG).map(k=>(
                     <button key={k} onClick={()=>switchLang(k)} style={{
@@ -422,18 +429,18 @@ Exactly 5 shadowSentences (short, conversational, fun). Exactly 3 expressions (i
                 </div>
 
                 <div style={{textAlign:"center",marginBottom:24}}>
-                  <div style={{fontSize:48,marginBottom:10}}>🎧</div>
+                  <div style={{fontSize:48,marginBottom:10}}>📰</div>
                   <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:38,fontWeight:400,lineHeight:1.15,color:C.cream,marginBottom:8}}>
-                    들려야<br/><span style={{color:C.gold,fontStyle:"italic"}}>말할 수 있다</span>
+                    세상의 흐름을 읽고<br/><span style={{color:C.gold,fontStyle:"italic"}}>논리적으로 말하다</span>
                   </div>
                   <p style={{color:C.creamMuted,fontSize:14,lineHeight:1.9,marginTop:10}}>
-                    매일 재미있는 콘텐츠로<br/>
-                    <strong style={{color:C.cream}}>듣기 → 쉐도잉 → 스피킹</strong> 루틴
+                    매일 업데이트되는 글로벌 뉴스와 시사 이슈로<br/>
+                    <strong style={{color:C.cream}}>듣기 → 쉐도잉 → 스피킹</strong> 루틴을 시작하세요.
                   </p>
                 </div>
 
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:24}}>
-                  {[["🎬","영화·셀럽 뉴스"],["🔁","쉐도잉"],["🎤","음성 스피킹"]].map(([e,l])=>(
+                  {[["🌍","글로벌 뉴스"],["🔁","문장 쉐도잉"],["🎤","스피킹 및 교정"]].map(([e,l])=>(
                     <div key={l} style={{...S.card,textAlign:"center",padding:"14px 8px"}}>
                       <div style={{fontSize:20,marginBottom:6}}>{e}</div>
                       <div style={{fontFamily:"'DM Sans',sans-serif",fontSize:11,color:C.creamMuted}}>{l}</div>
@@ -441,15 +448,7 @@ Exactly 5 shadowSentences (short, conversational, fun). Exactly 3 expressions (i
                   ))}
                 </div>
 
-                <div style={{background:"#0a1a0a",border:`1px solid #1e3a1e`,borderRadius:10,padding:"14px 16px",marginBottom:20}}>
-                  <div style={{color:C.success,fontFamily:"'DM Sans',sans-serif",fontSize:13,lineHeight:1.9}}>
-                    📱 <strong>오늘의 루틴</strong><br/>
-                    1️⃣ 재미있는 주제 선택 → 2️⃣ 원어민 음성 듣기<br/>
-                    3️⃣ 쉐도잉 → 4️⃣ 🟢🟡🔴 난이도 선택 스피킹<br/>
-                    5️⃣ AI 교정 → 6️⃣ 📤 복습 노트 공유
-                  </div>
-                </div>
-                <button style={S.btn} onClick={fetchTopics}>오늘의 {L.name} 주제 가져오기 →</button>
+                <button style={S.btn} onClick={fetchTopics}>오늘의 {L.name} 이슈 가져오기 →</button>
               </div>
             )}
 
@@ -457,12 +456,11 @@ Exactly 5 shadowSentences (short, conversational, fun). Exactly 3 expressions (i
             {screen==="selecting"&&(
               <div style={{paddingTop:32}}>
                 <StepBar step={0}/>
-                <div style={S.label}>STEP 1 — 주제 선택 {L.emoji}</div>
-                <div style={S.h2}>오늘 뭘 들어볼까요?</div>
-                <p style={{color:C.creamMuted,fontSize:13,marginBottom:18,lineHeight:1.7}}>선택하면 듣기 → 쉐도잉 → 스피킹 순서로 진행됩니다.</p>
+                <div style={S.label}>STEP 1 — 뉴스/시사 주제 선택 {L.emoji}</div>
+                <div style={S.h2}>어떤 주제에 관심이 있으신가요?</div>
+                <p style={{color:C.creamMuted,fontSize:13,marginBottom:18,lineHeight:1.7}}>선택하면 뉴스 요약본 듣기 → 핵심 문장 쉐도잉 → 스피킹 순서로 진행됩니다.</p>
                 {topics.map(t=><TopicCard key={t.id} topic={t} onSelect={startLesson}/>)}
-                <button style={S.btn} onClick={fetchTopics}>🔄 다른 주제 가져오기</button>
-                {/* Fix 5: 레슨 중 언어 변경 — 선택 화면에선 허용하되 확인만 */}
+                <button style={S.btn} onClick={fetchTopics}>🔄 다른 이슈 가져오기</button>
                 <button style={S.btnSec} onClick={()=>setScreen("home")}>← 홈으로</button>
               </div>
             )}
@@ -475,7 +473,7 @@ Exactly 5 shadowSentences (short, conversational, fun). Exactly 3 expressions (i
                 <div style={S.h2}>{topic?.title}</div>
                 <p style={{color:C.creamMuted,fontSize:13,fontFamily:"'DM Sans',sans-serif",marginBottom:18}}>{topic?.emoji} {topic?.category}</p>
                 <div style={{...S.card,borderLeft:`3px solid ${C.gold}`}}>
-                  <div style={S.h3}>📢 오늘의 주제 요약</div>
+                  <div style={S.h3}>📢 오늘의 브리핑 요약</div>
                   <p style={{color:C.cream,lineHeight:1.85,fontSize:15,marginBottom:14}}>{lesson.summary}</p>
                   <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
                     <ListenBtn text={lesson.summary} rate={0.85} label="🔊 보통 속도" langCode={L.code} voiceStart={L.voiceStart}/>
@@ -483,7 +481,7 @@ Exactly 5 shadowSentences (short, conversational, fun). Exactly 3 expressions (i
                   </div>
                 </div>
                 <div style={S.card}>
-                  <div style={S.h3}>⚡ 핵심 표현 3가지</div>
+                  <div style={S.h3}>⚡ 비즈니스 / 시사 핵심 표현</div>
                   {lesson.expressions?.map((ex,i)=>(
                     <div key={i} style={{background:"#0a1220",border:`1px solid #1e3a2a`,borderRadius:8,padding:"12px 14px",marginBottom:10}}>
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
@@ -506,11 +504,11 @@ Exactly 5 shadowSentences (short, conversational, fun). Exactly 3 expressions (i
             {screen==="shadowing"&&lesson&&(
               <div style={{paddingTop:32}}>
                 <StepBar step={2}/>
-                <div style={S.label}>STEP 3 — 쉐도잉</div>
-                <div style={S.h2}>듣고 따라 말해보세요</div>
+                <div style={S.label}>STEP 3 — 뉴스 쉐도잉</div>
+                <div style={S.h2}>앵커처럼 또렷하게 말해보세요</div>
                 <div style={{background:"#0a150a",border:`1px solid #1e3a1e`,borderRadius:10,padding:"12px 16px",marginBottom:18}}>
                   <div style={{color:C.success,fontFamily:"'DM Sans',sans-serif",fontSize:13,lineHeight:1.8}}>
-                    💡 🔊 듣기 → 멈추고 똑같이 따라 말하기 → ✅ 체크<br/>처음엔 느리게, 익숙해지면 보통 속도로!
+                    💡 🔊 듣기 → 멈추고 똑같이 따라 말하기 → ✅ 체크<br/>문장의 억양과 강세에 집중해보세요.
                   </div>
                 </div>
                 {lesson.shadowSentences?.map((s,i)=>(
@@ -530,8 +528,8 @@ Exactly 5 shadowSentences (short, conversational, fun). Exactly 3 expressions (i
                 <div style={{textAlign:"center",marginBottom:14}}>
                   <span style={{fontFamily:"'DM Sans',sans-serif",fontSize:13,color:done.length>=3?C.gold:C.muted}}>{done.length}/5 완료</span>
                 </div>
-                <button style={S.btn} onClick={()=>setScreen("speaking")}>{done.length>=3?"🎤 스피킹 시작하기 →":"건너뛰고 스피킹 →"}</button>
-                <button style={S.btnSec} onClick={()=>setScreen("listening")}>← 듣기로</button>
+                <button style={S.btn} onClick={()=>setScreen("speaking")}>{done.length>=3?"🎤 의견 말하기 (스피킹) →":"건너뛰고 스피킹 →"}</button>
+                <button style={S.btnSec} onClick={()=>setScreen("listening")}>← 듣기로 돌아가기</button>
               </div>
             )}
 
@@ -539,9 +537,9 @@ Exactly 5 shadowSentences (short, conversational, fun). Exactly 3 expressions (i
             {screen==="speaking"&&lesson&&(
               <div style={{paddingTop:32}}>
                 <StepBar step={3}/>
-                <div style={S.label}>STEP 4 — 스피킹</div>
-                <div style={S.h2}>난이도를 선택하세요</div>
-                <p style={{color:C.creamMuted,fontSize:13,marginBottom:18,lineHeight:1.7}}>원하는 난이도의 질문을 선택하고 {L.name}로 답해보세요.</p>
+                <div style={S.label}>STEP 4 — 스피킹 (의견 표현)</div>
+                <div style={S.h2}>당신의 생각을 들려주세요</div>
+                <p style={{color:C.creamMuted,fontSize:13,marginBottom:18,lineHeight:1.7}}>이 뉴스에 대해 어떻게 생각하시나요? 난이도를 골라 답해보세요.</p>
 
                 {lesson.speakingQuestions?.map((q,i)=>(
                   <QuestionCard key={i} q={q} selected={selectedQ?.level===q.level} onSelect={setSelectedQ} langCode={L.code} voiceStart={L.voiceStart}/>
@@ -549,7 +547,7 @@ Exactly 5 shadowSentences (short, conversational, fun). Exactly 3 expressions (i
 
                 {selectedQ&&(
                   <div style={{...S.card,borderTop:`2px solid ${LEVEL_COLOR[selectedQ.level]||C.gold}`,marginTop:4}}>
-                    <div style={S.h3}>{hasMic?"🎤 음성으로 답하기":`✍️ ${L.name}로 입력하기`}</div>
+                    <div style={S.h3}>{hasMic?"🎤 음성으로 의견 말하기":`✍️ ${L.name}로 작성하기`}</div>
                     {hasMic?(
                       <>
                         <MicButton onTranscript={setUserResp} langCode={L.code}/>
@@ -564,11 +562,11 @@ Exactly 5 shadowSentences (short, conversational, fun). Exactly 3 expressions (i
 
                 {!selectedQ&&(
                   <div style={{...S.card,background:"#0a1220",border:`1px dashed ${C.cardBorder}`,textAlign:"center"}}>
-                    <div style={{color:C.muted,fontFamily:"'DM Sans',sans-serif",fontSize:14}}>↑ 위에서 난이도를 선택해주세요</div>
+                    <div style={{color:C.muted,fontFamily:"'DM Sans',sans-serif",fontSize:14}}>↑ 위에서 질문을 선택해주세요</div>
                   </div>
                 )}
 
-                <button style={{...S.btn,opacity:(userResp.trim()&&selectedQ)?1:0.4,marginTop:4}} onClick={submitSpeaking} disabled={!userResp.trim()||!selectedQ}>피드백 받기 →</button>
+                <button style={{...S.btn,opacity:(userResp.trim()&&selectedQ)?1:0.4,marginTop:4}} onClick={submitSpeaking} disabled={!userResp.trim()||!selectedQ}>AI 교정 받기 →</button>
                 <button style={S.btnSec} onClick={()=>setScreen("shadowing")}>← 쉐도잉으로</button>
               </div>
             )}
@@ -577,18 +575,18 @@ Exactly 5 shadowSentences (short, conversational, fun). Exactly 3 expressions (i
             {screen==="feedback"&&feedback&&(
               <div style={{paddingTop:32}}>
                 <StepBar step={4}/>
-                <div style={S.label}>STEP 5 — 피드백</div>
+                <div style={S.label}>STEP 5 — AI 교정 및 심화</div>
                 {selectedQ&&(
                   <div style={{display:"inline-flex",alignItems:"center",gap:6,background:LEVEL_COLOR[selectedQ.level]+"22",border:`1px solid ${LEVEL_COLOR[selectedQ.level]}`,borderRadius:20,padding:"4px 14px",marginBottom:14}}>
                     <span>{LEVEL_EMOJI[selectedQ.level]}</span>
-                    <span style={{fontFamily:"'DM Sans',sans-serif",fontSize:12,color:LEVEL_COLOR[selectedQ.level]}}>{selectedQ.level} 레벨로 답하셨어요</span>
+                    <span style={{fontFamily:"'DM Sans',sans-serif",fontSize:12,color:LEVEL_COLOR[selectedQ.level]}}>{selectedQ.level} 레벨 답변 분석 완료</span>
                   </div>
                 )}
                 <p style={{color:C.gold,fontSize:14,fontFamily:"'DM Sans',sans-serif",marginBottom:18,fontStyle:"italic"}}>{feedback.encouragement}</p>
 
                 <div style={S.card}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
-                    <div style={S.h3}>✅ 교정된 버전</div>
+                    <div style={S.h3}>✅ 자연스럽고 정제된 버전</div>
                     <ListenBtn text={feedback.correctedVersion} label="🔊 듣기" langCode={L.code} voiceStart={L.voiceStart}/>
                   </div>
                   <p style={{color:C.success,lineHeight:1.85,fontSize:15,margin:0,fontStyle:"italic"}}>{feedback.correctedVersion}</p>
@@ -596,7 +594,7 @@ Exactly 5 shadowSentences (short, conversational, fun). Exactly 3 expressions (i
 
                 {feedback.corrections?.length>0&&(
                   <div style={S.card}>
-                    <div style={S.h3}>📝 교정 포인트</div>
+                    <div style={S.h3}>📝 문법 및 어휘 교정</div>
                     {feedback.corrections.map((c,i)=>(
                       <div key={i} style={{background:"#0a1220",border:`1px solid ${C.cardBorder}`,borderRadius:8,padding:"12px 14px",marginBottom:8}}>
                         <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:6}}>
@@ -611,12 +609,12 @@ Exactly 5 shadowSentences (short, conversational, fun). Exactly 3 expressions (i
                 )}
                 {feedback.corrections?.length===0&&(
                   <div style={{...S.card,borderColor:"#1e3a2a",background:"#0a1a0f"}}>
-                    <div style={{color:C.success,fontFamily:"'DM Sans',sans-serif",fontSize:14}}>🎉 완벽해요! 교정할 부분이 없습니다.</div>
+                    <div style={{color:C.success,fontFamily:"'DM Sans',sans-serif",fontSize:14}}>🎉 훌륭합니다! 교정할 부분이 거의 없습니다.</div>
                   </div>
                 )}
 
                 <div style={S.card}>
-                  <div style={S.h3}>⚡ 원어민 표현 3가지</div>
+                  <div style={S.h3}>⚡ 고급 어휘 제안</div>
                   {feedback.naturalExpressions?.map((e,i)=>(
                     <div key={i} style={{background:"#0a1220",border:`1px solid #1e3a2a`,borderRadius:8,padding:"12px 14px",marginBottom:8}}>
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
@@ -630,7 +628,7 @@ Exactly 5 shadowSentences (short, conversational, fun). Exactly 3 expressions (i
 
                 <div style={{...S.card,borderLeft:`3px solid ${C.gold}`}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
-                    <div style={S.h3}>💬 추가 질문</div>
+                    <div style={S.h3}>💬 심화 질문 (Follow-up)</div>
                     <ListenBtn text={feedback.followUpQuestion} label="🔊" langCode={L.code} voiceStart={L.voiceStart}/>
                   </div>
                   <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:19,color:C.cream,marginBottom:14}}>{feedback.followUpQuestion}</div>
@@ -649,7 +647,7 @@ Exactly 5 shadowSentences (short, conversational, fun). Exactly 3 expressions (i
 <button style={S.btnSec} onClick={async()=>{
   setLoadingMsg("마무리 피드백 정리 중");setScreen("loading");
   try{
-    const sys=`You are a friendly ${activeLang} teacher. Return ONLY valid JSON no markdown.
+    const sys=`You are a professional ${activeLang} teacher. Return ONLY valid JSON no markdown.
 {"correctedVersion":"","corrections":[],"finalNote":"한국어 마무리 2문장","todaysPhrases":["핵심표현1","핵심표현2","핵심표현3"]}`;
     const t=await callAI(`Summarize today's lesson on: ${topic?.title}. Give encouraging finalNote in Korean and 3 key ${activeLang} phrases learned today.`,sys);
     const d=parseJSON(t);setFinalFb(d);
@@ -672,7 +670,7 @@ Exactly 5 shadowSentences (short, conversational, fun). Exactly 3 expressions (i
                 <div style={{...S.card,background:"#0d1a2a",borderColor:"#2a4a6a",marginBottom:20}}>
                   <div style={S.h3}>📤 복습 노트 공유하기</div>
                   <p style={{color:C.creamMuted,fontSize:13,fontFamily:"'DM Sans',sans-serif",lineHeight:1.7,marginBottom:14}}>
-                    오늘 학습한 내용 전체를 텍스트로 내보냅니다.<br/>카카오톡, 이메일, 메모 앱 등으로 저장해두세요.
+                    오늘 다룬 뉴스 요약과 핵심 어휘를 내보냅니다.<br/>메모 앱에 저장해두고 틈틈이 복습하세요.
                   </p>
                   <button onClick={handleShare} style={{...S.btn,background:shareStatus==="copied"||shareStatus==="shared"?C.success:C.blue,color:"white"}}>
                     {shareStatus==="copied"?"✅ 클립보드에 복사됨!":shareStatus==="shared"?"✅ 공유 완료!":shareStatus==="failed"?"❌ 직접 복사해주세요":"📤 복습 노트 공유하기"}
