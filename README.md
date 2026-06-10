@@ -1,17 +1,18 @@
-# 📖 English Daily
+# 📰 Language Daily
 
-AI 기반 영어 학습 앱. 매일 최신 뉴스 주제로 스피킹 연습 + 교정 + 표현 학습.
+AI 기반 뉴스/시사 언어 학습 앱 (영어 & 프랑스어 지원)
+매일 최신 글로벌 뉴스, 테크/비즈니스 이슈로 심도 있는 스피킹 연습과 고급 어휘를 학습합니다.
 
 ---
 
 ## 📁 파일 구조
 
-```
+```text
 english-daily/
 ├── public/
-│   └── index.html      ← 웹 앱 (여기 수정 없음)
+│   └── index.html      ← 웹 앱 프론트엔드 (UI & 상태 관리)
 ├── api/
-│   └── chat.js         ← Vercel 배포용 서버리스 함수
+│   └── chat.js         ← Vercel 배포용 서버리스 함수 (Gemini API 통신)
 ├── server.js           ← 로컬 실행용 Node.js 서버
 └── README.md
 ```
